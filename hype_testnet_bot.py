@@ -127,6 +127,13 @@ async def run_testnet_bot():
     logger.info(f"Risk per trade: {config.RISK_PER_TRADE_PCT * 100}%")
     logger.info("✓ NO REAL MONEY - Using testnet")
     logger.info("⚠️  Testnet markets may be illiquid")
+    logger.info("")
+    logger.info("CONTROL COMMANDS:")
+    logger.info("  Force close all positions: touch .force_close_positions")
+    logger.info("  Or send signal: kill -USR1 $(pgrep -f hype_testnet_bot)")
+    logger.info("  Or run script: ./force_close.sh")
+    logger.info("  Reset circuit breaker: touch .reset_circuit_breaker")
+    logger.info("  Or send signal: kill -USR2 $(pgrep -f hype_testnet_bot)")
 
     # Create and start bot
     bot = TradingBot(config)

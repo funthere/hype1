@@ -149,6 +149,11 @@ class BotConfig:
     MAX_DAILY_LOSS_PCT: float = 0.15  # Emergency shutdown at 15% daily loss
     EMERGENCY_SHUTDOWN: bool = False
 
+    # Circuit Breaker - Stop trading after consecutive losses
+    CIRCUIT_BREAKER_ENABLED: bool = True
+    MAX_CONSECUTIVE_LOSSES: int = 3  # Stop after N consecutive losses
+    CIRCUIT_BREAKER_COOLDOWN_MINUTES: int = 30  # Wait before trading again
+
     # Fees
     MAKER_FEE_PCT: float = -0.0002
     TAKER_FEE_PCT: float = 0.0004
@@ -577,6 +582,11 @@ class TradingBot:
         self.losing_trades = 0
         self.total_fees = 0.0
 
+        # Circuit Breaker State
+        self.consecutive_losses = 0
+        self.circuit_breaker_triggered = False
+        self.circuit_breaker_trigger_time = None
+
         # Setup signal handlers for testing
         self._setup_signal_handlers()
 
@@ -589,10 +599,27 @@ class TradingBot:
         except Exception as e:
             logger.warning(f"Could not setup signal handlers: {e}")
 
+        try:
+            # SIGUSR2 = Reset circuit breaker
+            signal.signal(signal.SIGUSR2, self._handle_reset_circuit_breaker_signal)
+            logger.info("Signal handlers loaded: SIGUSR2 = reset circuit breaker")
+        except Exception as e:
+            logger.warning(f"Could not setup SIGUSR2 handler: {e}")
+
     def _handle_force_close_signal(self, signum, frame):
         """Handle SIGUSR1 signal - force close all positions"""
         logger.info("⚠️  SIGUSR1 received - forcing all positions to close...")
         self.force_close_all = True
+
+    def _handle_reset_circuit_breaker_signal(self, signum, frame):
+        """Handle SIGUSR2 signal - reset circuit breaker"""
+        if self.circuit_breaker_triggered:
+            logger.info("✅ SIGUSR2 received - circuit breaker reset")
+            self.circuit_breaker_triggered = False
+            self.circuit_breaker_trigger_time = None
+            self.consecutive_losses = 0
+        else:
+            logger.info("SIGUSR2 received - circuit breaker not active")
 
     async def force_close_all_positions(self, reason="FORCE_CLOSE"):
         """Force close all open positions (for testing)"""
@@ -631,6 +658,24 @@ class TradingBot:
             logger.error("EMERGENCY SHUTDOWN ENABLED - NOT TRADING")
             return
 
+        # Log control commands
+        mode = "PAPER" if self.config.PAPER_TRADING else ("TESTNET" if self.config.USE_TESTNET else "MAINNET")
+        logger.info("")
+        logger.info("CONTROL COMMANDS:")
+        logger.info("  Force close all positions: touch .force_close_positions")
+        logger.info("  Or send signal: kill -USR1 $(pgrep -f hype_trading_bot)")
+        logger.info("  Or run script: ./force_close.sh --signal")
+        logger.info("  Reset circuit breaker: touch .reset_circuit_breaker")
+        logger.info("  Or send signal: kill -USR2 $(pgrep -f hype_trading_bot)")
+        logger.info(f"  Mode: {mode}")
+
+        # Log circuit breaker status
+        if self.config.CIRCUIT_BREAKER_ENABLED:
+            logger.info("")
+            logger.info("CIRCUIT BREAKER:")
+            logger.info(f"  Max consecutive losses: {self.config.MAX_CONSECUTIVE_LOSSES}")
+            logger.info(f"  Cooldown period: {self.config.CIRCUIT_BREAKER_COOLDOWN_MINUTES} minutes")
+
         # Register candle callback
         self.market_data.on_candle_update(self._on_candle_update)
 
@@ -656,6 +701,15 @@ class TradingBot:
                         os.remove(".force_close_positions")  # Remove the file
                     await self.force_close_all_positions("FORCE_CLOSE")
                     self.force_close_all = False
+
+                # Check for circuit breaker manual reset
+                if os.path.exists(".reset_circuit_breaker"):
+                    os.remove(".reset_circuit_breaker")
+                    if self.circuit_breaker_triggered:
+                        logger.info("✅ Circuit breaker manually reset via control file")
+                        self.circuit_breaker_triggered = False
+                        self.circuit_breaker_trigger_time = None
+                        self.consecutive_losses = 0
 
                 # Check daily reset
                 await self._check_daily_reset()
@@ -693,6 +747,12 @@ class TradingBot:
             self.last_trade_date = now.date()
             self.daily_trades = 0
             self.daily_pnl = 0.0
+            # Reset circuit breaker on new day
+            if self.circuit_breaker_triggered:
+                logger.info("Daily reset: Circuit breaker deactivated")
+                self.circuit_breaker_triggered = False
+                self.circuit_breaker_trigger_time = None
+            self.consecutive_losses = 0
             logger.info(f"Daily reset - Date: {now.date()}")
 
     async def _check_emergency_conditions(self):
@@ -716,8 +776,51 @@ class TradingBot:
 
         logger.warning("EMERGENCY SHUTDOWN COMPLETE")
 
+    async def _check_circuit_breaker(self):
+        """Check if circuit breaker cooldown has expired"""
+        if not self.circuit_breaker_triggered:
+            return
+
+        if self.circuit_breaker_trigger_time is None:
+            return
+
+        elapsed = (datetime.now() - self.circuit_breaker_trigger_time).total_seconds() / 60
+        if elapsed >= self.config.CIRCUIT_BREAKER_COOLDOWN_MINUTES:
+            # Reset circuit breaker
+            logger.info(f"✅ Circuit breaker cooldown expired ({elapsed:.1f} min elapsed)")
+            logger.info(f"   Resuming trading. Consecutive losses reset to 0.")
+            self.circuit_breaker_triggered = False
+            self.circuit_breaker_trigger_time = None
+            self.consecutive_losses = 0
+        else:
+            remaining = self.config.CIRCUIT_BREAKER_COOLDOWN_MINUTES - elapsed
+            logger.debug(f"Circuit breaker active: {remaining:.1f} min remaining")
+
+    async def _trigger_circuit_breaker(self):
+        """Trigger circuit breaker after consecutive losses"""
+        self.circuit_breaker_triggered = True
+        self.circuit_breaker_trigger_time = datetime.now()
+
+        logger.warning("=" * 60)
+        logger.warning("⛔ CIRCUIT BREAKER TRIGGERED!")
+        logger.warning("=" * 60)
+        logger.warning(f"   Consecutive losses: {self.consecutive_losses}")
+        logger.warning(f"   Max allowed: {self.config.MAX_CONSECUTIVE_LOSSES}")
+        logger.warning(f"   Cooldown: {self.config.CIRCUIT_BREAKER_COOLDOWN_MINUTES} minutes")
+        logger.warning("")
+        logger.warning("   Trading paused until cooldown expires.")
+        logger.warning("   Open positions will still be managed.")
+        logger.warning("=" * 60)
+
     async def _process_signal(self, signal: Dict):
         """Process trading signal"""
+        # Check circuit breaker
+        if self.config.CIRCUIT_BREAKER_ENABLED:
+            await self._check_circuit_breaker()
+            if self.circuit_breaker_triggered:
+                logger.info("⛔ Circuit breaker active - skipping signal")
+                return
+
         # Check if we can take this trade
         if len(self.positions) >= self.config.MAX_POSITIONS:
             logger.info("Max positions reached, skipping signal")
@@ -979,8 +1082,19 @@ class TradingBot:
         self.daily_pnl += position.pnl
         if position.pnl > 0:
             self.winning_trades += 1
+            # Reset consecutive losses on win
+            self.consecutive_losses = 0
+            logger.info(f"✅ Win! P&L: ${position.pnl:.2f} | Consecutive losses reset: 0")
         else:
             self.losing_trades += 1
+            # Track consecutive losses for circuit breaker
+            self.consecutive_losses += 1
+            logger.warning(f"❌ Loss! P&L: ${position.pnl:.2f} | Consecutive losses: {self.consecutive_losses}/{self.config.MAX_CONSECUTIVE_LOSSES}")
+
+            # Check if circuit breaker should trigger
+            if (self.config.CIRCUIT_BREAKER_ENABLED and
+                self.consecutive_losses >= self.config.MAX_CONSECUTIVE_LOSSES):
+                await self._trigger_circuit_breaker()
         self.total_trades += 1
         self.total_fees += fee
 
@@ -1049,6 +1163,16 @@ class TradingBot:
         print(f"Total P&L: ${self.daily_pnl:.2f}")
         print(f"Total Fees: ${self.total_fees:.2f}")
         print(f"Open Positions: {len([p for p in self.positions if p.status == OrderStatus.OPEN])}")
+
+        # Circuit breaker status
+        if self.config.CIRCUIT_BREAKER_ENABLED:
+            cb_status = "🔴 ACTIVE" if self.circuit_breaker_triggered else "🟢 OK"
+            print(f"Circuit Breaker: {cb_status}")
+            print(f"  Consecutive Losses: {self.consecutive_losses}/{self.config.MAX_CONSECUTIVE_LOSSES}")
+            if self.circuit_breaker_triggered and self.circuit_breaker_trigger_time:
+                elapsed = (datetime.now() - self.circuit_breaker_trigger_time).total_seconds() / 60
+                remaining = self.config.CIRCUIT_BREAKER_COOLDOWN_MINUTES - elapsed
+                print(f"  Cooldown Remaining: {max(0, remaining):.1f} min")
 
         if self.trades:
             print("\nRecent Trades:")

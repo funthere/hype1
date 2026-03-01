@@ -125,6 +125,8 @@ async def run_paper_bot(capital: float = 10000):
     logger.info("CONTROL COMMANDS:")
     logger.info("  Force close all positions: touch .force_close_positions")
     logger.info("  Or send signal: kill -USR1 $(pgrep -f hype_paper_trading_bot)")
+    logger.info("  Reset circuit breaker: touch .reset_circuit_breaker")
+    logger.info("  Or send signal: kill -USR2 $(pgrep -f hype_paper_trading_bot)")
 
     # Create and start bot
     bot = TradingBot(config)
