@@ -21,6 +21,8 @@ import time
 import hmac
 import hashlib
 import websockets
+import signal
+import os
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 from dataclasses import dataclass, field
@@ -89,14 +91,35 @@ class Trade:
 @dataclass
 class BotConfig:
     """Bot configuration"""
-    # API
-    API_URL: str = "https://api.hyperliquid.xyz/exchange"
-    INFO_URL: str = "https://api.hyperliquid.xyz/info"
-    WS_URL: str = "wss://api.hyperliquid.xyz/ws"
+    # Environment
+    USE_TESTNET: bool = False  # Use testnet exchange (illiquid)
+    PAPER_TRADING: bool = False  # Simulate trades with mainnet data
+
+    # API (auto-switches based on USE_TESTNET - ignores PAPER_TRADING)
+    @property
+    def API_URL(self) -> str:
+        if self.USE_TESTNET:
+            return "https://api.hyperliquid-testnet.xyz/exchange"
+        return "https://api.hyperliquid.xyz/exchange"
+
+    @property
+    def INFO_URL(self) -> str:
+        if self.USE_TESTNET:
+            return "https://api.hyperliquid-testnet.xyz/info"
+        return "https://api.hyperliquid.xyz/info"
+
+    @property
+    def WS_URL(self) -> str:
+        if self.USE_TESTNET:
+            return "wss://api.hyperliquid-testnet.xyz/ws"
+        return "wss://api.hyperliquid.xyz/ws"
 
     # Account
     PRIVATE_KEY: str = ""  # Set from environment or config
     ADDRESS: str = ""
+
+    # Paper Trading
+    PAPER_CAPITAL: float = 10000  # Starting capital for paper trading
 
     # Trading
     ASSET: str = "HYPE"
@@ -111,11 +134,11 @@ class BotConfig:
     CONFIDENCE_THRESHOLD: int = 45
     EMA_TREND_FILTER: int = 20
 
-    # Risk Management
-    RISK_PER_TRADE_PCT: float = 0.12
+    # Risk Management (Balanced config - RECOMMENDED)
+    RISK_PER_TRADE_PCT: float = 0.08  # 8% per trade (balanced)
     TP_ATR_MULTIPLIER: float = 2.0
     SL_ATR_MULTIPLIER: float = 0.4
-    MAX_POSITIONS: int = 1
+    MAX_POSITIONS: int = 2  # Max 2 concurrent positions
     MAX_DAILY_TRADES: int = 20
 
     # Order Settings
@@ -295,7 +318,25 @@ class HyperliquidAPI:
             headers=headers
         )
 
-        return response.json()
+        # Check response status
+        if response.status_code != 200:
+            logger.error(f"API error: {response.status_code} - {response.text}")
+            return {"status": "error", "code": response.status_code, "msg": response.text}
+
+        # Parse JSON with error handling
+        try:
+            data = response.json()
+        except ValueError as e:
+            logger.error(f"Failed to parse API response: {e} - Response: {response.text[:200]}")
+            return {"status": "error", "msg": "Invalid JSON response"}
+
+        # Check for API errors
+        if data.get("status") == "error" or data.get("response", {}).get("type") == "error":
+            error_msg = data.get("response", {}).get("error", data.get("msg", "Unknown error"))
+            logger.error(f"Order failed: {error_msg}")
+            return {"status": "error", "msg": error_msg}
+
+        return data
 
 
 class MarketDataFeed:
@@ -467,15 +508,11 @@ class StrategyEngine:
             tp_price = current_price + (atr * self.config.TP_ATR_MULTIPLIER)
             sl_price = current_price - (atr * self.config.SL_ATR_MULTIPLIER)
 
-            # Calculate quantity (position sizing)
-            capital = 10000  # Would fetch from account
-            risk_amount = capital * self.config.RISK_PER_TRADE_PCT
-            risk_per_share = abs(current_price - sl_price) / current_price
-            quantity = risk_amount / risk_per_share
-
-            # Apply leverage
-            notional = quantity * current_price
-            quantity = notional * self.config.LEVERAGE / current_price
+            # Calculate quantity (position sizing) - matches backtest formula
+            capital = self.config.PAPER_CAPITAL if self.config.PAPER_TRADING else 10000  # Use paper capital if set
+            margin = capital * self.config.RISK_PER_TRADE_PCT  # Margin to use
+            notional = margin * self.config.LEVERAGE  # Notional with leverage
+            quantity = notional / current_price  # Token quantity
 
             signal = {
                 'action': Side.LONG,
@@ -491,12 +528,11 @@ class StrategyEngine:
             tp_price = current_price - (atr * self.config.TP_ATR_MULTIPLIER)
             sl_price = current_price + (atr * self.config.SL_ATR_MULTIPLIER)
 
-            capital = 10000
-            risk_amount = capital * self.config.RISK_PER_TRADE_PCT
-            risk_per_share = abs(sl_price - current_price) / current_price
-            quantity = risk_amount / risk_per_share
-            notional = quantity * current_price
-            quantity = notional * self.config.LEVERAGE / current_price
+            # Calculate quantity (position sizing) - matches backtest formula
+            capital = self.config.PAPER_CAPITAL if self.config.PAPER_TRADING else 10000  # Use paper capital if set
+            margin = capital * self.config.RISK_PER_TRADE_PCT  # Margin to use
+            notional = margin * self.config.LEVERAGE  # Notional with leverage
+            quantity = notional / current_price  # Token quantity
 
             signal = {
                 'action': Side.SHORT,
@@ -532,6 +568,7 @@ class TradingBot:
         self.daily_pnl = 0.0
         self.last_trade_date = None
         self.emergency_stop = False
+        self.force_close_all = False  # Flag to force close all positions
 
         # Statistics
         self.start_time = datetime.now()
@@ -539,6 +576,45 @@ class TradingBot:
         self.winning_trades = 0
         self.losing_trades = 0
         self.total_fees = 0.0
+
+        # Setup signal handlers for testing
+        self._setup_signal_handlers()
+
+    def _setup_signal_handlers(self):
+        """Setup signal handlers for testing controls"""
+        try:
+            # SIGUSR1 = Force close all positions
+            signal.signal(signal.SIGUSR1, self._handle_force_close_signal)
+            logger.info("Signal handlers loaded: SIGUSR1 = force close all positions")
+        except Exception as e:
+            logger.warning(f"Could not setup signal handlers: {e}")
+
+    def _handle_force_close_signal(self, signum, frame):
+        """Handle SIGUSR1 signal - force close all positions"""
+        logger.info("⚠️  SIGUSR1 received - forcing all positions to close...")
+        self.force_close_all = True
+
+    async def force_close_all_positions(self, reason="FORCE_CLOSE"):
+        """Force close all open positions (for testing)"""
+        if not self.positions:
+            logger.info(f"[{reason}] No positions to close")
+            return
+
+        logger.warning(f"[{reason}] Closing {len(self.positions)} position(s)...")
+
+        # Get current price
+        mids = await self.api.get_mids()
+        current_price = float(mids.get(self.config.ASSET, 0))
+
+        positions_to_close = self.positions[:]
+
+        for position in positions_to_close:
+            await self._close_position(position, current_price, reason)
+
+        logger.info(f"[{reason}] All positions closed. P&L: ${self.daily_pnl:.2f}")
+
+        # Setup signal handlers for testing
+        self._setup_signal_handlers()
 
     async def start(self):
         """Start the trading bot"""
@@ -574,6 +650,13 @@ class TradingBot:
 
         while not self.emergency_stop:
             try:
+                # Check for force close signal (control file or flag)
+                if self.force_close_all or os.path.exists(".force_close_positions"):
+                    if os.path.exists(".force_close_positions"):
+                        os.remove(".force_close_positions")  # Remove the file
+                    await self.force_close_all_positions("FORCE_CLOSE")
+                    self.force_close_all = False
+
                 # Check daily reset
                 await self._check_daily_reset()
 
@@ -661,6 +744,71 @@ class TradingBot:
         """Place order based on signal"""
         side = signal['action']
 
+        # Check if paper trading mode
+        if self.config.PAPER_TRADING:
+            await self._place_paper_order(signal)
+            return
+
+        # Real trading mode
+        await self._place_real_order(signal, side)
+
+    async def _place_paper_order(self, signal: Dict):
+        """Simulate order placement in paper trading mode"""
+        side = signal['action']
+        quantity = signal['quantity']
+        entry_price = signal['entry_price']
+        notional_value = quantity * entry_price
+
+        # Generate paper order ID
+        paper_oid = int(time.time() * 1000) % 1000000
+        cloid = f"PAPER-{paper_oid}"
+
+        logger.info(f"[PAPER] {side.value} order: {quantity:.2f} @ ${entry_price:.4f} (${notional_value:,.2f} notional)")
+
+        # Simulate immediate fill at entry price (paper trading assumption)
+        logger.info(f"[PAPER] Order FILLED at ${entry_price:.4f}")
+
+        # Create position object
+        position = Position(
+            side=side,
+            entry_price=entry_price,
+            quantity=quantity,
+            tp_price=signal['tp_price'],
+            sl_price=signal['sl_price'],
+            entry_time=datetime.now(),
+            leverage=self.config.LEVERAGE,
+            oid=paper_oid,
+            cloid=cloid,
+            status=OrderStatus.OPEN  # OPEN so TP/SL monitoring works
+        )
+
+        self.positions.append(position)
+        self.daily_trades += 1
+
+        logger.info(f"[PAPER] Position opened: {side.value} {quantity:.2f} @ ${entry_price:.4f}")
+
+    async def _place_real_order(self, signal: Dict, side: Side):
+        """Place real order on exchange"""
+        # Validate quantity (sanity check)
+        quantity = signal['quantity']
+        notional_value = quantity * signal['entry_price']
+
+        # Minimum notional check
+        min_notional = self.config.MIN_ORDER_SIZE
+        if notional_value < min_notional:
+            logger.warning(f"Order too small: ${notional_value:.2f} < ${min_notional} minimum")
+            return
+
+        # Maximum sanity checks (based on actual capital)
+        capital = self.config.PAPER_CAPITAL if self.config.PAPER_TRADING else 10000
+        max_notional = capital * self.config.LEVERAGE * 10  # Max 10x position
+        max_quantity = max_notional / signal['entry_price']  # Convert to tokens
+
+        if quantity > max_quantity or notional_value > max_notional:
+            logger.error(f"ORDER REJECTED - Quantity too large: {quantity:.2f} (${notional_value:,.2f} notional)")
+            logger.error(f"Max allowed: {max_quantity} tokens or ${max_notional:,.0f} notional")
+            return
+
         # Determine order price (slightly better than current)
         entry_price = signal['entry_price']
         if side == Side.LONG:
@@ -671,7 +819,7 @@ class TradingBot:
         # Generate client order ID
         cloid = f"{int(time.time() * 1000):x}"
 
-        logger.info(f"Placing {side.value} order: {signal['quantity']:.2f} @ ${limit_price:.4f}")
+        logger.info(f"Placing {side.value} order: {quantity:.2f} @ ${limit_price:.4f} (${notional_value:,.2f} notional)")
 
         # Place order
         response = await self.api.place_order(
@@ -684,10 +832,11 @@ class TradingBot:
 
         # Handle response
         if response.get("status") == "ok":
-            order_response = response["response"]
+            order_response = response.get("response", {})
 
-            if order_response["type"] == "order":
-                for status in order_response["data"]["statuses"]:
+            if order_response.get("type") == "order":
+                statuses = order_response.get("data", {}).get("statuses", [])
+                for status in statuses:
                     if "resting" in status:
                         oid = status["resting"]["oid"]
                         logger.info(f"Order placed: OID={oid}, CloID={cloid}")
@@ -714,8 +863,11 @@ class TradingBot:
                     elif "filled" in status:
                         # Order immediately filled
                         await self._handle_filled_order(status["filled"], signal, cloid)
+            else:
+                logger.error(f"Unexpected response type: {order_response.get('type')}")
         else:
-            logger.error(f"Order failed: {response}")
+            error_msg = response.get("msg", "Unknown error")
+            logger.error(f"Order failed: {error_msg}")
 
     async def _handle_filled_order(self, filled: dict, signal: Dict, cloid: str):
         """Handle immediately filled order"""
@@ -725,7 +877,7 @@ class TradingBot:
 
         logger.info(f"Order filled: OID={oid} @ ${avg_px:.4f}, Size: {total_sz}")
 
-        # Create position
+        # Create position with OPEN status (so TP/SL monitoring works)
         position = Position(
             side=signal['action'],
             entry_price=avg_px,
@@ -736,7 +888,7 @@ class TradingBot:
             leverage=self.config.LEVERAGE,
             oid=oid,
             cloid=cloid,
-            status=OrderStatus.FILLED
+            status=OrderStatus.OPEN  # OPEN so TP/SL monitoring works
         )
 
         self.positions.append(position)
@@ -760,42 +912,49 @@ class TradingBot:
         current_price = float(mids.get(self.config.ASSET, 0))
 
         for position in self.positions[:]:  # Copy to avoid modification during iteration
+            # Check status and log
             if position.status != OrderStatus.OPEN:
+                logger.debug(f"Skipping position {position.oid} - status: {position.status.value}")
                 continue
 
             should_close = False
             exit_price = current_price
             exit_reason = None
 
-            # Check TP
+            # Check TP/SL with logging
             if position.side == Side.LONG:
                 if current_price >= position.tp_price:
                     should_close = True
                     exit_price = position.tp_price
                     exit_reason = "TP"
+                    logger.info(f"LONG TP HIT: ${current_price:.4f} >= ${position.tp_price:.4f}")
                 elif current_price <= position.sl_price:
                     should_close = True
                     exit_price = position.sl_price
                     exit_reason = "SL"
+                    logger.info(f"LONG SL HIT: ${current_price:.4f} <= ${position.sl_price:.4f}")
             else:  # SHORT
                 if current_price <= position.tp_price:
                     should_close = True
                     exit_price = position.tp_price
                     exit_reason = "TP"
+                    logger.info(f"SHORT TP HIT: ${current_price:.4f} <= ${position.tp_price:.4f}")
                 elif current_price >= position.sl_price:
                     should_close = True
                     exit_price = position.sl_price
                     exit_reason = "SL"
+                    logger.info(f"SHORT SL HIT: ${current_price:.4f} >= ${position.sl_price:.4f}")
 
             if should_close:
                 await self._close_position(position, exit_price, exit_reason)
 
     async def _close_position(self, position: Position, exit_price: float, reason: str):
         """Close position"""
-        logger.info(f"Closing position: {position.side.value} @ ${exit_price:.4f} ({reason})")
+        mode_tag = "[PAPER] " if self.config.PAPER_TRADING else ""
+        logger.info(f"{mode_tag}Closing position: {position.side.value} @ ${exit_price:.4f} ({reason})")
 
-        # Cancel existing orders
-        if position.oid:
+        # Cancel existing orders (only in real mode)
+        if not self.config.PAPER_TRADING and position.oid:
             await self.api.cancel_order(position.oid)
 
         # Calculate P&L
@@ -842,7 +1001,7 @@ class TradingBot:
         if position in self.positions:
             self.positions.remove(position)
 
-        logger.info(f"Position closed: P&L=${position.pnl:.2f} | "
+        logger.info(f"{mode_tag}Position closed: P&L=${position.pnl:.2f} | "
                    f"Daily P&L=${self.daily_pnl:.2f} | "
                    f"Win Rate: {self._calculate_win_rate():.1f}%")
 
@@ -903,17 +1062,14 @@ class TradingBot:
 # Configuration and Setup
 # =============================================================================
 
-def create_bot_config(private_key: str, address: str, testnet: bool = False) -> BotConfig:
+def create_bot_config(private_key: str, address: str, testnet: bool = False, paper_trading: bool = False) -> BotConfig:
     """Create bot configuration"""
     config = BotConfig()
 
     config.PRIVATE_KEY = private_key
     config.ADDRESS = address
-
-    if testnet:
-        config.API_URL = "https://api.hyperliquid-testnet.xyz/exchange"
-        config.INFO_URL = "https://api.hyperliquid-testnet.xyz/info"
-        config.WS_URL = "wss://api.hyperliquid-testnet.xyz/ws"
+    config.USE_TESTNET = testnet
+    config.PAPER_TRADING = paper_trading
 
     return config
 
@@ -925,13 +1081,45 @@ async def run_bot():
 
     private_key = os.environ.get("HYPERLICUID_PRIVATE_KEY")
     wallet_address = os.environ.get("HYPERLICUID_ADDRESS")
+    use_testnet = os.environ.get("HYPERLICUID_TESTNET", "false").lower() in ("true", "1", "yes")
+    paper_trading = os.environ.get("HYPERLICUID_PAPER_TRADING", "false").lower() in ("true", "1", "yes")
+    paper_capital = float(os.environ.get("HYPERLICUID_PAPER_CAPITAL", "10000"))
 
-    if not private_key or not wallet_address:
+    # For paper trading, we don't need real keys
+    if paper_trading:
+        if not private_key:
+            private_key = "0" * 64  # Dummy key for paper trading
+        if not wallet_address:
+            wallet_address = "0x0000000000000000000000000000000000000000"
+    elif not private_key or not wallet_address:
         logger.error("Please set HYPERLICUID_PRIVATE_KEY and HYPERLICUID_ADDRESS environment variables")
         return
 
+    # Log mode
+    if paper_trading:
+        mode = f"PAPER TRADING (Mainnet Data, Simulated Trades) - ${paper_capital:,.0f}"
+    elif use_testnet:
+        mode = "TESTNET (Testnet Exchange, Illiquid)"
+    else:
+        mode = "MAINNET (Real Money - BE CAREFUL!)"
+
+    logger.info(f"Starting bot in {mode} mode")
+    if paper_trading:
+        logger.info("✓ PAPER TRADING MODE - No real money at risk")
+        logger.info(f"✓ Starting capital: ${paper_capital:,.0f}")
+        logger.info("✓ Using mainnet data for realistic signals")
+    elif use_testnet:
+        logger.info("✓ TESTNET MODE - No real money at risk")
+        logger.info("⚠️  Testnet markets may be illiquid")
+
     # Create config
-    config = create_bot_config(private_key, wallet_address, testnet=False)
+    config = create_bot_config(
+        private_key,
+        wallet_address,
+        testnet=use_testnet,
+        paper_trading=paper_trading
+    )
+    config.PAPER_CAPITAL = paper_capital
 
     # Create and start bot
     bot = TradingBot(config)
@@ -949,24 +1137,35 @@ async def run_bot():
 if __name__ == "__main__":
     print("""
 ╔══════════════════════════════════════════════════════════════════╗
-║              HYPE/USDC AUTOMATED TRADING BOT                  ║
-║              Ultra-Optimized Momentum Strategy              ║
+║         HYPE/USDC AUTOMATED TRADING BOT                     ║
+║         Ultra-Optimized Momentum Strategy                   ║
 ╠══════════════════════════════════════════════════════════════════╣
-║  EXPECTED PERFORMANCE:                                          ║
-║  - Return: 65.7% in 52 days (3,325% annualized)             ║
-║  - Max Drawdown: 3.2%                                        ║
-║  - Profit Factor: 1.67                                        ║
-║                                                               ║
-║  RISK WARNING:                                               ║
-║  - 12% risk per trade                                        ║
-║  - 5x leverage                                                ║
-║  - ONLY USE CAPITAL YOU CAN AFFORD TO LOSE                 ║
-║                                                               ║
-║  BEFORE RUNNING:                                            ║
-║  1. Set HYPERLICUID_PRIVATE_KEY env variable                ║
-║   2. Set HYPERLICUID_ADDRESS env variable                   ║
-║  3. Test on testnet first!                                   ║
-║  4. Start with small position sizes                         ║
+║  EXPECTED PERFORMANCE:                                         ║
+║  - Return: 48.1% in 52 days (1,476% annualized)            ║
+║  - Max Drawdown: 3.0%                                        ║
+║  - Profit Factor: 1.54                                        ║
+║  - Win Rate: 33.0%                                            ║
+║                                                                ║
+║  CONFIGURATION (Balanced):                                     ║
+║  - 8% risk per trade                                          ║
+║  - 5x leverage, max 2 positions                               ║
+║  - ONLY USE CAPITAL YOU CAN AFFORD TO LOSE                  ║
+║                                                                ║
+║  BEFORE RUNNING:                                             ║
+║  1. Set HYPERLICUID_PRIVATE_KEY env variable                 ║
+║  2. Set HYPERLICUID_ADDRESS env variable                    ║
+║                                                                ║
+║  PAPER TRADING (RECOMMENDED):                                ║
+║  export HYPERLICUID_PAPER_TRADING=true                       ║
+║  export HYPERLICUID_PAPER_CAPITAL=10000                     ║
+║  → Uses mainnet data, simulates trades (NO real money)      ║
+║                                                                ║
+║  TESTNET (illiquid markets):                                 ║
+║  export HYPERLICUID_TESTNET=true                             ║
+║  → Uses testnet exchange (needs testnet funds)              ║
+║                                                                ║
+║  MAINNET (REAL MONEY):                                       ║
+║  → No special flags needed (BE CAREFUL!)                     ║
 ╚══════════════════════════════════════════════════════════════════╝
     """)
 

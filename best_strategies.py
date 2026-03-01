@@ -122,6 +122,110 @@ class HYPE_Momentum_15m_MaxReturn(MomentumConfig):
 
 
 # ========================================================================
+# BALANCED Configuration (15m) - 8% risk, 2 positions
+# ========================================================================
+# Intermediate option between Ultra (12%) and Safer (5%)
+
+@dataclass
+class HYPE_Momentum_15m_Balanced(MomentumConfig):
+    """
+    BALANCED Momentum Configuration for 15-minute HYPE/USDC
+
+    - 8% risk per trade (middle ground)
+    - Max 2 concurrent positions (balanced)
+    - Total portfolio risk: 16% maximum
+
+    Good balance between returns and risk control
+    """
+    # Asset
+    ASSET: str = "HYPE"
+    TIMEFRAME: str = "15m"
+    LEVERAGE: int = 5
+
+    # Ultra-optimized Momentum parameters (same as original)
+    ROC_SHORT: int = 1
+    ROC_LONG: int = 5
+    MOMENTUM_THRESHOLD: float = 0.08
+    EMA_TREND_FILTER: int = 20
+    VOLUME_CONFIRM: bool = True
+    MIN_VOLUME_RATIO: float = 1.2
+
+    # Ultra-aggressive entry
+    CONFIDENCE_THRESHOLD: int = 45
+
+    # Balanced risk/reward
+    RISK_PER_TRADE_PCT: float = 0.08  # 8% per trade (balanced)
+    TP_ATR_MULTIPLIER: float = 2.0
+    SL_ATR_MULTIPLIER: float = 0.4
+
+    # Position limits
+    MAX_CONCURRENT_POSITIONS: int = 2  # Up to 2 positions
+    TRADE_COOLDOWN_BARS: int = 6
+    MAX_DAILY_TRADES: int = 20
+
+    # Trailing stop
+    USE_TRAILING_STOP: bool = True
+    TRAIL_ACTIVATION_PCT: float = 0.5
+    TRAIL_STOP_ATR: float = 0.6
+
+    # Fees
+    MAKER_FEE_PCT: float = -0.0002
+    TAKER_FEE_PCT: float = 0.0004
+
+
+# ========================================================================
+# SAFER Configuration (15m) - 5% risk, 3 positions
+# ========================================================================
+# Use this for safer trading with multiple concurrent positions
+
+@dataclass
+class HYPE_Momentum_15m_Safer(MomentumConfig):
+    """
+    SAFER Momentum Configuration for 15-minute HYPE/USDC
+
+    - 5% risk per trade (vs 12% original)
+    - Max 3 concurrent positions (vs 1 original)
+    - Total portfolio risk: 15% maximum
+
+    Lower risk per trade = better survivability and smoother equity curve
+    """
+    # Asset
+    ASSET: str = "HYPE"
+    TIMEFRAME: str = "15m"
+    LEVERAGE: int = 5
+
+    # Ultra-optimized Momentum parameters (same as original)
+    ROC_SHORT: int = 1
+    ROC_LONG: int = 5
+    MOMENTUM_THRESHOLD: float = 0.08
+    EMA_TREND_FILTER: int = 20
+    VOLUME_CONFIRM: bool = True
+    MIN_VOLUME_RATIO: float = 1.2
+
+    # Ultra-aggressive entry
+    CONFIDENCE_THRESHOLD: int = 45
+
+    # Safer risk/reward (CHANGED)
+    RISK_PER_TRADE_PCT: float = 0.05  # 5% per trade (safer)
+    TP_ATR_MULTIPLIER: float = 2.0
+    SL_ATR_MULTIPLIER: float = 0.4
+
+    # Position limits (CHANGED)
+    MAX_CONCURRENT_POSITIONS: int = 3  # Up to 3 positions
+    TRADE_COOLDOWN_BARS: int = 6
+    MAX_DAILY_TRADES: int = 20
+
+    # Trailing stop
+    USE_TRAILING_STOP: bool = True
+    TRAIL_ACTIVATION_PCT: float = 0.5
+    TRAIL_STOP_ATR: float = 0.6
+
+    # Fees
+    MAKER_FEE_PCT: float = -0.0002
+    TAKER_FEE_PCT: float = 0.0004
+
+
+# ========================================================================
 # STRATEGY 2: EMA Crossover (1 Hour) - Most Validated
 # ========================================================================
 # Best for: Long-term trend following, most statistically significant
@@ -305,6 +409,26 @@ def run_momentum_15m_max_return(data_path='hyperliquid_hype_15m.csv', initial_ca
     df['timestamp'] = pd.to_datetime(df['timestamp'])
 
     engine = TrendFollowingEngine(initial_capital=initial_capital, config=HYPE_Momentum_15m_MaxReturn())
+    results = engine.run_trend_backtest(df, strategy='momentum')
+    return results
+
+
+def run_momentum_15m_balanced(data_path='hyperliquid_hype_15m.csv', initial_capital=10000):
+    """Run Balanced Momentum strategy (8% risk, 2 positions) on 15-minute data"""
+    df = pd.read_csv(data_path)
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+    engine = TrendFollowingEngine(initial_capital=initial_capital, config=HYPE_Momentum_15m_Balanced())
+    results = engine.run_trend_backtest(df, strategy='momentum')
+    return results
+
+
+def run_momentum_15m_safer(data_path='hyperliquid_hype_15m.csv', initial_capital=10000):
+    """Run Safer Momentum strategy (5% risk, 3 positions) on 15-minute data"""
+    df = pd.read_csv(data_path)
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+    engine = TrendFollowingEngine(initial_capital=initial_capital, config=HYPE_Momentum_15m_Safer())
     results = engine.run_trend_backtest(df, strategy='momentum')
     return results
 
