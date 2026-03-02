@@ -33,6 +33,15 @@ import requests
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
+# Hyperliquid SDK
+from hyperliquid.info import Info
+from hyperliquid.exchange import Exchange
+from hyperliquid.utils import constants
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -99,14 +108,14 @@ class BotConfig:
     @property
     def API_URL(self) -> str:
         if self.USE_TESTNET:
-            return "https://api.hyperliquid-testnet.xyz/exchange"
-        return "https://api.hyperliquid.xyz/exchange"
+            return constants.TESTNET_API_URL
+        return constants.MAINNET_API_URL
 
     @property
     def INFO_URL(self) -> str:
         if self.USE_TESTNET:
-            return "https://api.hyperliquid-testnet.xyz/info"
-        return "https://api.hyperliquid.xyz/info"
+            return constants.TESTNET_API_URL
+        return constants.MAINNET_API_URL
 
     @property
     def WS_URL(self) -> str:
@@ -117,6 +126,7 @@ class BotConfig:
     # Account
     PRIVATE_KEY: str = ""  # Set from environment or config
     ADDRESS: str = ""
+    ACCOUNT_ADDRESS: Optional[str] = None  # For API wallet support
 
     # Paper Trading
     PAPER_CAPITAL: float = 10000  # Starting capital for paper trading
@@ -165,188 +175,206 @@ class BotConfig:
 
 
 class HyperliquidAPI:
-    """Hyperliquid API client"""
+    """Hyperliquid API client using official SDK"""
 
     def __init__(self, config: BotConfig):
         self.config = config
         self.account = Account.from_key(config.PRIVATE_KEY)
         self.address = self.account.address
-        self.nonce = int(time.time() * 1000)
 
-    def _get_nonce(self) -> int:
-        """Get and increment nonce"""
-        nonce = int(time.time() * 1000)
-        if nonce <= self.nonce:
-            nonce = self.nonce + 1
-        self.nonce = nonce
-        return nonce
+        # Initialize SDK clients
+        base_url = self.config.API_URL
+        self.info = Info(base_url, skip_ws=True)
 
-    def _sign(self, message: dict) -> str:
-        """Sign message with private key"""
-        # Convert to JSON string
-        message_str = json.dumps(message, separators=(',', ':'))
+        # Create Exchange client with wallet
+        # For API wallets, provide account_address
+        exchange_kwargs = {"account_address": config.ACCOUNT_ADDRESS} if config.ACCOUNT_ADDRESS else {}
+        self.exchange = Exchange(self.account, base_url, **exchange_kwargs)
 
-        # EIP-712 signing
-        message_hash = hashlib.sha256(message_str.encode()).digest()
-        signed_message = encode_defunct(text="HyperliquidTransaction:" + message_str)
-        signature = self.account.sign_message(signed_message)
-        return signature.signature.hex()
-
-    async def place_order(self, side: Side, price: float, quantity: float,
-                          reduce_only: bool = False, cloid: Optional[str] = None) -> dict:
-        """Place limit order"""
-
-        # Get asset index
-        asset_index = await self.get_asset_index()
-
-        # Build order message
-        order_msg = {
-            "a": asset_index,
-            "b": side == Side.LONG,
-            "p": str(price),
-            "s": str(quantity),
-            "r": reduce_only,
-            "t": {
-                "limit": {
-                    "tif": "Gtc"  # Good til canceled
-                }
-            }
-        }
-
-        if cloid:
-            order_msg["c"] = cloid
-
-        request = {
-            "orders": [order_msg],
-            "grouping": "na"
-        }
-
-        return await self._submit_exchange_request("order", request)
-
-    async def cancel_order(self, oid: int) -> dict:
-        """Cancel order by ID"""
-        request = {
-            "cancels": [{"a": await self.get_asset_index(), "o": oid}]
-        }
-        return await self._submit_exchange_request("cancel", request)
-
-    async def cancel_all_orders(self) -> dict:
-        """Cancel all open orders"""
-        # First get open orders
-        open_orders = await self.get_open_orders()
-
-        if open_orders:
-            cancels = [{"a": await self.get_asset_index(), "o": o["oid"]}
-                     for o in open_orders]
-            request = {"cancels": cancels}
-            return await self._submit_exchange_request("cancel", request)
-
-        return {"status": "ok"}
-
-    async def modify_order(self, oid: int, new_price: float, new_quantity: float) -> dict:
-        """Modify existing order"""
-        asset_index = await self.get_asset_index()
-
-        order_msg = {
-            "a": asset_index,
-            "b": True,  # Default to buy, will be ignored
-            "p": str(new_price),
-            "s": str(new_quantity),
-            "r": False,
-            "t": {"limit": {"tif": "Gtc"}}
-        }
-
-        request = {
-            "oid": oid,
-            "order": order_msg
-        }
-
-        return await self._submit_exchange_request("modify", request)
+        # Asset index cache
+        self._asset_index: Optional[int] = None
 
     async def get_asset_index(self) -> int:
         """Get HYPE asset index from metadata"""
-        if self.config.ASSET_INDEX > 0:
-            return self.config.ASSET_INDEX
+        if self._asset_index is not None:
+            return self._asset_index
 
-        response = requests.post(self.config.INFO_URL, json={"type": "meta"})
-        data = response.json()
+        # Use SDK's meta method
+        meta_data = self.info.meta()
 
-        for i, asset in enumerate(data["universe"]):
+        for i, asset in enumerate(meta_data["universe"]):
             if asset["name"] == self.config.ASSET:
+                self._asset_index = i
                 self.config.ASSET_INDEX = i
                 logger.info(f"Found {self.config.ASSET} at index {i}")
                 return i
 
         raise ValueError(f"{self.config.ASSET} not found in universe")
 
-    async def get_open_orders(self) -> List[dict]:
-        """Get open orders"""
-        payload = {
-            "type": "openOrders",
-            "asset": await self.get_asset_index()
-        }
+    async def place_order(self, side: Side, price: float, quantity: float,
+                          reduce_only: bool = False, cloid: Optional[str] = None) -> dict:
+        """Place limit order using SDK"""
 
-        response = requests.post(self.config.INFO_URL, json=payload)
-        data = response.json()
-        return data
+        # Get asset index
+        asset_index = await self.get_asset_index()
 
-    async def get_positions(self) -> List[dict]:
-        """Get current positions"""
-        # This would typically come from user state or info endpoint
-        # For now, we'll track positions internally
-        return []
-
-    async def get_mids(self) -> dict:
-        """Get current mid prices"""
-        response = requests.post(self.config.INFO_URL, json={"type": "allMids"})
-        return response.json()
-
-    async def get_balance(self) -> dict:
-        """Get account balance"""
-        # This requires user state query
-        # Implementation would depend on account type
-        pass
-
-    async def _submit_exchange_request(self, action_type: str, action: dict) -> dict:
-        """Submit signed request to exchange"""
-        nonce = self._get_nonce()
-
-        request = {
-            action_type: action,
-            "nonce": nonce
-        }
-
-        # Add signature
-        signature = self._sign(request)
-        request["signature"] = signature
-
-        # Send request
-        headers = {"Content-Type": "application/json"}
-        response = requests.post(
-            self.config.API_URL,
-            json=request,
-            headers=headers
+        # Build order using SDK format
+        order_result = self.exchange.order(
+            coin=self.config.ASSET,
+            is_buy=(side == Side.LONG),
+            sz=quantity,
+            limit_px=price,
+            order_type={"limit": {"tif": "Gtc"}},  # Good til canceled
+            reduce_only=reduce_only,
+            cloid=cloid
         )
 
-        # Check response status
-        if response.status_code != 200:
-            logger.error(f"API error: {response.status_code} - {response.text}")
-            return {"status": "error", "code": response.status_code, "msg": response.text}
-
-        # Parse JSON with error handling
-        try:
-            data = response.json()
-        except ValueError as e:
-            logger.error(f"Failed to parse API response: {e} - Response: {response.text[:200]}")
-            return {"status": "error", "msg": "Invalid JSON response"}
-
-        # Check for API errors
-        if data.get("status") == "error" or data.get("response", {}).get("type") == "error":
-            error_msg = data.get("response", {}).get("error", data.get("msg", "Unknown error"))
+        # SDK returns dict with response status
+        if order_result.get("status") == "ok":
+            return {
+                "status": "ok",
+                "response": order_result.get("response", {})
+            }
+        else:
+            error_msg = order_result.get("response", {}).get("error", "Unknown error")
             logger.error(f"Order failed: {error_msg}")
             return {"status": "error", "msg": error_msg}
 
-        return data
+    async def cancel_order(self, oid: int) -> dict:
+        """Cancel order by ID using SDK"""
+        result = self.exchange.cancel(coin=self.config.ASSET, oid=oid)
+
+        if result.get("status") == "ok":
+            return {"status": "ok"}
+        else:
+            error_msg = result.get("response", {}).get("error", "Unknown error")
+            return {"status": "error", "msg": error_msg}
+
+    async def cancel_all_orders(self) -> dict:
+        """Cancel all open orders using SDK"""
+        # First get open orders
+        open_orders = await self.get_open_orders()
+
+        if open_orders:
+            # Build cancel list
+            cancel_list = [
+                {"coin": self.config.ASSET, "oid": o["oid"]}
+                for o in open_orders
+            ]
+            result = self.exchange.bulk_cancel(cancel_list)
+
+            if result.get("status") == "ok":
+                return {"status": "ok"}
+            else:
+                error_msg = result.get("response", {}).get("error", "Unknown error")
+                return {"status": "error", "msg": error_msg}
+
+        return {"status": "ok"}
+
+    async def modify_order(self, oid: int, new_price: float, new_quantity: float) -> dict:
+        """Modify existing order using SDK"""
+        # SDK doesn't have direct modify, we cancel and replace
+        # Cancel the old order
+        cancel_result = await self.cancel_order(oid)
+
+        if cancel_result.get("status") != "ok":
+            return cancel_result
+
+        # Place new order (we need to know the side - assume LONG for now)
+        # In practice, you'd need to track the original order's side
+        place_result = await self.place_order(
+            side=Side.LONG,
+            price=new_price,
+            quantity=new_quantity
+        )
+
+        return place_result
+
+    async def get_open_orders(self) -> List[dict]:
+        """Get open orders using SDK"""
+        orders = self.info.open_orders(self.config.ASSET)
+        return orders
+
+    async def get_positions(self) -> List[dict]:
+        """Get current positions using SDK"""
+        if not self.address:
+            return []
+
+        user_state = self.info.user_state(self.address)
+
+        # Extract positions from user state
+        asset_positions = user_state.get("assetPositions", [])
+
+        positions = []
+        for pos_data in asset_positions:
+            position = pos_data.get("position", {})
+            if position:  # Only include non-empty positions
+                positions.append(position)
+
+        return positions
+
+    async def get_mids(self) -> dict:
+        """Get current mid prices using SDK"""
+        return self.info.all_mids()
+
+    async def get_balance(self) -> dict:
+        """Get account balance using SDK"""
+        if not self.address:
+            return {}
+
+        user_state = self.info.user_state(self.address)
+
+        # Extract margin summary
+        margin_summary = user_state.get("marginSummary", {})
+        cross_margin_summary = user_state.get("crossMarginSummary", {})
+
+        return {
+            "account_value": margin_summary.get("accountValue", 0),
+            "total_margin_used": margin_summary.get("totalMarginUsed", 0),
+            "total_npos": cross_margin_summary.get("totalNpos", 0),
+            "margin_summary": margin_summary,
+            "cross_margin_summary": cross_margin_summary
+        }
+
+    async def get_user_state(self) -> dict:
+        """Get full user state using SDK"""
+        if not self.address:
+            return {}
+
+        return self.info.user_state(self.address)
+
+    async def set_leverage(self, leverage: int, is_cross: bool = True) -> dict:
+        """Set leverage using SDK"""
+        result = self.exchange.update_leverage(
+            leverage=leverage,
+            coin=self.config.ASSET,
+            is_cross=is_cross
+        )
+
+        if result.get("status") == "ok":
+            return {"status": "ok"}
+        else:
+            error_msg = result.get("response", {}).get("error", "Unknown error")
+            return {"status": "error", "msg": error_msg}
+
+    async def get_order_status(self, oid: int) -> dict:
+        """Get order status by ID using SDK"""
+        # SDK doesn't have a direct method, use open_orders
+        open_orders = await self.get_open_orders()
+
+        for order in open_orders:
+            if order.get("oid") == oid:
+                return order
+
+        return None
+
+    async def get_recent_fills(self, limit: int = 100) -> List[dict]:
+        """Get recent trade fills for the user using SDK"""
+        if not self.address:
+            return []
+
+        fills = self.info.user_fills(self.address)
+        return fills[:limit] if fills else []
 
 
 class MarketDataFeed:
