@@ -98,6 +98,12 @@ async def run_paper_bot(capital: float = 10000):
 ║  1. Set HYPERLICUID_PAPER_CAPITAL (default: 10000)            ║
 ║  2. Run: python3 hype_paper_trading_bot.py                    ║
 ║  3. No API keys needed!                                       ║
+║                                                                ║
+║  WEB DASHBOARD:                                                ║
+║  The bot now includes a built-in web dashboard!               ║
+║  1. Start the bot (this script)                               ║
+║  2. In another terminal: streamlit run hype_dashboard.py      ║
+║  3. Open http://localhost:8501 in your browser                ║
 ╚══════════════════════════════════════════════════════════════════╝
     """)
 

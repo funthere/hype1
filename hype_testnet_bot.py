@@ -102,6 +102,12 @@ async def run_testnet_bot():
 ║  2. Set HYPERLICUID_PRIVATE_KEY env variable                  ║
 ║  3. Set HYPERLICUID_ADDRESS env variable                      ║
 ║  4. Run: python3 hype_testnet_bot.py                          ║
+║                                                                ║
+║  WEB DASHBOARD:                                                ║
+║  The bot now includes a built-in web dashboard!               ║
+║  1. Start the bot (this script)                               ║
+║  2. In another terminal: streamlit run hype_dashboard.py      ║
+║  3. Open http://localhost:8501 in your browser                ║
 ╚══════════════════════════════════════════════════════════════════╝
     """)
 

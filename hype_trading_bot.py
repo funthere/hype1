@@ -158,6 +158,11 @@ class BotConfig:
     MAKER_FEE_PCT: float = -0.0002
     TAKER_FEE_PCT: float = 0.0004
 
+    # Web UI / API
+    WEB_UI_ENABLED: bool = True
+    WEB_UI_HOST: str = "127.0.0.1"
+    WEB_UI_PORT: int = 8000
+
 
 class HyperliquidAPI:
     """Hyperliquid API client"""
@@ -574,6 +579,7 @@ class TradingBot:
         self.last_trade_date = None
         self.emergency_stop = False
         self.force_close_all = False  # Flag to force close all positions
+        self._is_paused = False  # Pause state for API control
 
         # Statistics
         self.start_time = datetime.now()
@@ -582,10 +588,19 @@ class TradingBot:
         self.losing_trades = 0
         self.total_fees = 0.0
 
+        # Capital tracking
+        self._starting_capital = config.PAPER_CAPITAL if config.PAPER_TRADING else 10000.0
+        self._current_capital = self._starting_capital
+        self._max_drawdown_pct = 0.0
+        self._peak_equity = self._starting_capital
+
         # Circuit Breaker State
         self.consecutive_losses = 0
         self.circuit_breaker_triggered = False
         self.circuit_breaker_trigger_time = None
+
+        # API Server (optional)
+        self.api_server = None
 
         # Setup signal handlers for testing
         self._setup_signal_handlers()
@@ -676,6 +691,19 @@ class TradingBot:
             logger.info(f"  Max consecutive losses: {self.config.MAX_CONSECUTIVE_LOSSES}")
             logger.info(f"  Cooldown period: {self.config.CIRCUIT_BREAKER_COOLDOWN_MINUTES} minutes")
 
+        # Start API server if enabled
+        if self.config.WEB_UI_ENABLED:
+            from bot_api_server import TradingBotAPI
+            self.api_server = TradingBotAPI(
+                self,
+                host=self.config.WEB_UI_HOST,
+                port=self.config.WEB_UI_PORT
+            )
+            # Start API server in background
+            self.api_server.start_in_background()
+            logger.info(f"✅ Web UI API server started on http://{self.config.WEB_UI_HOST}:{self.config.WEB_UI_PORT}")
+            logger.info(f"   Dashboard: streamlit run hype_dashboard.py")
+
         # Register candle callback
         self.market_data.on_candle_update(self._on_candle_update)
 
@@ -717,11 +745,11 @@ class TradingBot:
                 # Check emergency conditions
                 await self._check_emergency_conditions()
 
-                # Check exits on open positions
+                # Check exits on open positions (always check, even if paused)
                 await self._check_position_exits()
 
-                # Process new signals
-                if self.market_data.current_candle:
+                # Process new signals (only if not paused)
+                if not self._is_paused and self.market_data.current_candle:
                     signal = self.strategy.generate_signal()
                     if signal:
                         await self._process_signal(signal)
@@ -1080,6 +1108,14 @@ class TradingBot:
 
         # Update statistics
         self.daily_pnl += position.pnl
+        self._current_capital += position.pnl
+
+        # Update peak equity and drawdown
+        if self._current_capital > self._peak_equity:
+            self._peak_equity = self._current_capital
+        drawdown = (self._peak_equity - self._current_capital) / self._peak_equity * 100
+        self._max_drawdown_pct = max(self._max_drawdown_pct, drawdown)
+
         if position.pnl > 0:
             self.winning_trades += 1
             # Reset consecutive losses on win
@@ -1180,6 +1216,142 @@ class TradingBot:
                 print(f"  {trade.side.value:4} | "
                       f"${trade.entry_price:.4f} → ${trade.exit_price:.4f} | "
                       f"P&L: ${trade.pnl:>8.2f}")
+
+    # =============================================================================
+    # API Control Methods
+    # =============================================================================
+
+    @property
+    def Side(self):
+        """Access to Side enum for API"""
+        return Side
+
+    @property
+    def is_running(self) -> bool:
+        """Check if bot is running"""
+        return not self.emergency_stop
+
+    @property
+    def is_paused(self) -> bool:
+        """Check if bot is paused"""
+        return self._is_paused
+
+    @property
+    def starting_capital(self) -> float:
+        """Get starting capital"""
+        return self._starting_capital
+
+    @property
+    def current_capital(self) -> float:
+        """Get current capital"""
+        return self._current_capital
+
+    @property
+    def daily_trade_count(self) -> int:
+        """Get daily trade count"""
+        return self.daily_trades
+
+    @property
+    def max_drawdown_pct(self) -> float:
+        """Get max drawdown percentage"""
+        return self._max_drawdown_pct
+
+    @property
+    def circuit_breaker_until(self) -> Optional[datetime]:
+        """Get circuit breaker cooldown end time"""
+        return self.circuit_breaker_trigger_time
+
+    def pause_trading(self):
+        """Pause trading (keep managing open positions)"""
+        logger.info("⏸️ Trading paused via API")
+        self._is_paused = True
+
+    def resume_trading(self):
+        """Resume trading"""
+        logger.info("▶️ Trading resumed via API")
+        self._is_paused = False
+
+    def update_config_param(self, name: str, value):
+        """Update configuration parameter"""
+        if hasattr(self.config, name):
+            old_value = getattr(self.config, name)
+            setattr(self.config, name, value)
+            logger.info(f"⚙️ Config updated: {name} = {value} (was: {old_value})")
+        else:
+            raise ValueError(f"Unknown config parameter: {name}")
+
+    async def close_all_positions(self) -> int:
+        """Close all open positions via API"""
+        if not self.positions:
+            return 0
+
+        logger.info("🚨 Closing all positions via API...")
+        count = len(self.positions)
+
+        mids = await self.api.get_mids()
+        current_price = float(mids.get(self.config.ASSET, 0))
+
+        for position in self.positions[:]:
+            await self._close_position(position, current_price, "API_CLOSE")
+
+        logger.info(f"✅ Closed {count} positions via API")
+        return count
+
+    async def close_position(self, position_id: str) -> bool:
+        """Close a specific position by ID"""
+        for position in self.positions[:]:
+            if str(position.oid) == position_id or position.cloid == position_id:
+                mids = await self.api.get_mids()
+                current_price = float(mids.get(self.config.ASSET, 0))
+                await self._close_position(position, current_price, "API_CLOSE")
+                return True
+        return False
+
+    async def place_manual_trade(self, side: Side, quantity_usd: float, price: Optional[float] = None) -> dict:
+        """Place a manual trade"""
+        logger.info(f"💱 Manual trade: {side.value} ${quantity_usd}")
+
+        # Get current price if not specified
+        if price is None:
+            mids = await self.api.get_mids()
+            price = float(mids.get(self.config.ASSET, 0))
+            if price == 0:
+                raise ValueError("Could not get current price")
+
+        # Calculate quantity
+        quantity = quantity_usd / price
+
+        # Create signal dict
+        atr = price * 0.02  # Default ATR estimate
+        signal = {
+            'action': side,
+            'confidence': 100,
+            'entry_price': price,
+            'tp_price': price + (atr * self.config.TP_ATR_MULTIPLIER) if side == Side.LONG else price - (atr * self.config.TP_ATR_MULTIPLIER),
+            'sl_price': price - (atr * self.config.SL_ATR_MULTIPLIER) if side == Side.LONG else price + (atr * self.config.SL_ATR_MULTIPLIER),
+            'quantity': quantity,
+            'atr': atr
+        }
+
+        # Place the order
+        await self._place_order(signal)
+
+        return {
+            'side': side.value,
+            'quantity': quantity,
+            'entry_price': price,
+            'notional': quantity_usd
+        }
+
+    def reset_circuit_breaker(self):
+        """Reset circuit breaker"""
+        if self.circuit_breaker_triggered:
+            logger.info("✅ Circuit breaker reset via API")
+            self.circuit_breaker_triggered = False
+            self.circuit_breaker_trigger_time = None
+            self.consecutive_losses = 0
+        else:
+            logger.info("Circuit breaker not active, no reset needed")
 
 
 # =============================================================================
