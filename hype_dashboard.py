@@ -336,7 +336,7 @@ def render_trades(trades: List[dict]):
 
     st.dataframe(
         display_df[['Side', 'Entry', 'Exit', 'Qty', 'P&L', 'Exit Time']],
-        use_container_width=True,
+        width='stretch',
         hide_index=True
     )
 
@@ -524,11 +524,14 @@ def main():
         # Charts
         col1, col2 = st.columns([2, 1])
 
+        # Use timestamp-based keys to avoid duplicate ID errors on refresh
+        chart_key = int(time.time() * 1000)
+
         with col1:
-            st.plotly_chart(create_pnl_chart(trades), use_container_width=True)
+            st.plotly_chart(create_pnl_chart(trades), width='stretch', key=f"pnl_chart_{chart_key}")
 
         with col2:
-            st.plotly_chart(create_win_rate_chart(stats), use_container_width=True)
+            st.plotly_chart(create_win_rate_chart(stats), width='stretch', key=f"winrate_chart_{chart_key}")
 
         st.markdown("---")
 
