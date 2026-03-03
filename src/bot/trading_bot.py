@@ -612,6 +612,10 @@ class TradingBot:
         return self.daily_trades
 
     @property
+    def is_paused(self) -> bool:
+        return self._is_paused
+
+    @property
     def circuit_breaker_status(self) -> Dict:
         return {
             "enabled": self.config.CIRCUIT_BREAKER_ENABLED,

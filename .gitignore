@@ -58,6 +58,9 @@ virtualenv/
 *.hdf5
 *.pkl
 *.pickle
+*.db
+*.sqlite
+*.sqlite3
 data/
 raw_data/
 historical_data/

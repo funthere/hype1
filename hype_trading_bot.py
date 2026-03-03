@@ -457,9 +457,11 @@ class MarketDataFeed:
 
         self.current_candle = candle_data
 
-        # Notify callbacks
+        # Notify callbacks (handle both sync and async)
         for callback in self.callbacks:
-            await callback(candle_data)
+            result = callback(candle_data)
+            if asyncio.iscoroutine(result):
+                await result
 
 
 class StrategyEngine:

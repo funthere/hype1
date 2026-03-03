@@ -164,10 +164,10 @@ class MarketDataFeed:
             # Notify all registered callbacks
             for callback in self.callbacks:
                 try:
-                    if asyncio.iscoroutinefunction(callback):
-                        await callback(candle_data)
-                    else:
-                        callback(candle_data)
+                    result = callback(candle_data)
+                    # Check if result is a coroutine and await it
+                    if asyncio.iscoroutine(result):
+                        await result
                 except Exception as e:
                     logger.error(f"Error in callback: {e}")
 

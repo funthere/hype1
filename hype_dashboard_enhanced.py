@@ -630,14 +630,14 @@ def render_controls(client: BotAPIClient, status: dict):
 
     with cols[0]:
         if is_paused:
-            if st.button("▶️ Resume", type="primary", use_container_width=True):
+            if st.button("▶️ Resume", type="primary", width='stretch'):
                 result = client.control_action("resume")
                 if result and result.get("status") == "success":
                     st.success("Trading resumed")
                     time.sleep(1)
                     st.rerun()
         else:
-            if st.button("⏸️ Pause", use_container_width=True):
+            if st.button("⏸️ Pause", width='stretch'):
                 result = client.control_action("pause")
                 if result and result.get("status") == "success":
                     st.success("Trading paused")
@@ -645,7 +645,7 @@ def render_controls(client: BotAPIClient, status: dict):
                     st.rerun()
 
     with cols[1]:
-        if st.button("🚨 Close All", use_container_width=True):
+        if st.button("🚨 Close All", width='stretch'):
             result = client.control_action("close_all")
             if result and result.get("status") == "success":
                 st.success("All positions closed")
@@ -653,7 +653,7 @@ def render_controls(client: BotAPIClient, status: dict):
                 st.rerun()
 
     with cols[2]:
-        if st.button("🔄 Reset CB", use_container_width=True):
+        if st.button("🔄 Reset CB", width='stretch'):
             result = client.control_action("reset_cb")
             if result and result.get("status") == "success":
                 st.success("Circuit breaker reset")
@@ -661,7 +661,7 @@ def render_controls(client: BotAPIClient, status: dict):
                 st.rerun()
 
     with cols[3]:
-        if st.button("🔄 Refresh", use_container_width=True):
+        if st.button("🔄 Refresh", width='stretch'):
             st.rerun()
 
     with cols[4]:
@@ -746,7 +746,6 @@ def render_trades_table(trades: List[dict]):
 
     st.dataframe(
         display_df,
-        width='stretch',
         hide_index=True,
         use_container_width=True
     )
@@ -790,11 +789,14 @@ def main():
         # Charts row 1
         col1, col2 = st.columns(2)
 
+        # Use timestamp-based keys to avoid duplicate ID errors on refresh
+        chart_key = int(time.time() * 1000)
+
         with col1:
-            st.plotly_chart(create_price_chart(trades), use_container_width=True)
+            st.plotly_chart(create_price_chart(trades), width='stretch', key=f"price_chart_{chart_key}")
 
         with col2:
-            st.plotly_chart(create_drawdown_chart(trades), use_container_width=True)
+            st.plotly_chart(create_drawdown_chart(trades), width='stretch', key=f"drawdown_chart_{chart_key}")
 
         st.markdown("---")
 
@@ -802,10 +804,10 @@ def main():
         col3, col4 = st.columns(2)
 
         with col3:
-            st.plotly_chart(create_pnl_distribution(trades), use_container_width=True)
+            st.plotly_chart(create_pnl_distribution(trades), width='stretch', key=f"pnl_dist_chart_{chart_key}")
 
         with col4:
-            st.plotly_chart(create_performance_radar(stats), use_container_width=True)
+            st.plotly_chart(create_performance_radar(stats), width='stretch', key=f"perf_radar_chart_{chart_key}")
 
         st.markdown("---")
 
@@ -817,11 +819,14 @@ def main():
 
         col1, col2 = st.columns(2)
 
+        # Use timestamp-based keys to avoid duplicate ID errors on refresh
+        chart_key = int(time.time() * 1000)
+
         with col1:
-            st.plotly_chart(create_trade_heatmap(trades), use_container_width=True)
+            st.plotly_chart(create_trade_heatmap(trades), width='stretch', key=f"heatmap_chart_{chart_key}")
 
         with col2:
-            st.plotly_chart(create_rr_scatter(trades), use_container_width=True)
+            st.plotly_chart(create_rr_scatter(trades), width='stretch', key=f"rr_scatter_chart_{chart_key}")
 
     with tab3:
         positions = client.get_positions()
