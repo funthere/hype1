@@ -8,10 +8,29 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict
+from enum import Enum
 
 from ..core.config import Position, Trade, Side, OrderStatus
 
 logger = logging.getLogger(__name__)
+
+
+def _serialize_enum(obj):
+    """Convert enum values to their string values for JSON serialization"""
+    if isinstance(obj, Enum):
+        return obj.value
+    elif isinstance(obj, dict):
+        return {k: _serialize_enum(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_serialize_enum(item) for item in obj]
+    return obj
+
+
+def _json_dumps_safe(data):
+    """JSON encode with enum handling"""
+    if data is None:
+        return None
+    return json.dumps(_serialize_enum(data))
 
 
 class DatabaseManager:
@@ -411,7 +430,7 @@ class DatabaseManager:
             INSERT INTO events (event_type, message, event_data)
             VALUES (?, ?, ?)
             """,
-            (event_type, message, json.dumps(event_data) if event_data else None),
+            (event_type, message, _json_dumps_safe(event_data)),
         )
 
         self.conn.commit()
