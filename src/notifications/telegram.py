@@ -252,11 +252,11 @@ class TelegramNotifier:
         """Test Telegram connection by sending a test message"""
         return await self._send_message("✅ *Test Message*\nTrading bot notifications are working!")
 
-    def disable(self):
+    def disable(self) -> None:
         """Disable notifications (for testing/maintenance)"""
         self._enabled = False
 
-    def enable(self):
+    def enable(self) -> None:
         """Enable notifications"""
         self._enabled = True
 

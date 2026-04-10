@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Running the bot
 make run-paper        # Paper trading (simulated, no API keys needed)
 make run-testnet      # Testnet trading (requires .env with credentials)
+make run-mainnet      # Mainnet trading (requires .env with credentials)
 make dashboard        # Streamlit dashboard (http://localhost:8501)
 
 # Management
@@ -35,24 +36,29 @@ make dashboard DASHBOARD_PORT=8502
 
 ## Architecture Overview
 
-This is a HYPE/USDC trading bot for Hyperliquid DEX with two parallel implementations:
+This is a HYPE/USDC trading bot for Hyperliquid DEX using a modular architecture.
 
-### 1. Legacy Monolithic Implementation (`hype_trading_bot.py`)
-- Single-file implementation with embedded `HyperliquidAPI`, `MarketDataFeed`, `StrategyEngine`, `TradingBot`
-- Uses `hyperliquid-python-sdk` for exchange integration
-- Entry points: `hype_paper_trading_bot.py`, `hype_testnet_bot.py`
-- Includes FastAPI server (`bot_api_server.py`) and Streamlit dashboard (`hype_dashboard.py`)
-
-### 2. Modular Implementation (`src/`)
+### Modular Implementation (`src/`)
 - Separated concerns across modules:
   - `src/core/config.py` - Configuration and data models (`BotConfig`, `Side`, `Position`, `Trade`)
   - `src/core/strategy.py` - Strategy logic and risk management
+  - `src/core/survival.py` - Conservative risk profiles for production
+  - `src/core/multi_asset.py` - Multi-asset trading with correlation filtering
   - `src/exchange/connector.py` - Hyperliquid API wrapper using SDK
   - `src/exchange/market_data.py` - WebSocket market data feed
   - `src/bot/trading_bot.py` - Main trading bot orchestrator
   - `src/storage/database.py` - SQLite persistence
   - `src/notifications/telegram.py` - Telegram notifications
-  - `src/analytics/` - Performance analysis modules
+  - `src/analytics/` - Performance, health, and adaptive analytics modules
+
+### Entry Points
+- `run_paper_bot.py` - Paper trading (simulated, no API keys needed)
+- `run_testnet_bot.py` - Testnet trading (requires .env with credentials)
+- `run_mainnet_bot.py` - Mainnet trading (REAL MONEY - use with caution)
+- `run_modular_bot.py` - Alternative entry with CLI arguments (paper/testnet/mainnet)
+- `run_multi_asset_bot.py` - Multi-asset trading (experimental)
+- `bot_api_server.py` - FastAPI server for dashboard
+- `hype_dashboard.py` - Streamlit dashboard
 
 ### Key Design Patterns
 
@@ -116,8 +122,10 @@ The bot loads `.env` automatically via `load_dotenv()` at module import.
 
 ## Entry Points
 
-- `hype_paper_trading_bot.py` - Paper trading (no credentials needed)
-- `hype_testnet_bot.py` - Testnet trading (requires `PRIVATE_KEY`, `ADDRESS` in env)
-- `hype_dashboard.py` - Streamlit dashboard (connects to bot's API server)
-- `run_modular_bot.py` - Alternative entry for modular `src/bot/trading_bot.py`
+- `run_paper_bot.py` - Paper trading (no credentials needed)
+- `run_testnet_bot.py` - Testnet trading (requires `PRIVATE_KEY`, `ADDRESS` in env)
+- `run_mainnet_bot.py` - Mainnet trading (REAL MONEY - requires credentials)
+- `run_modular_bot.py` - Alternative entry with CLI arguments (paper/testnet/mainnet)
 - `run_multi_asset_bot.py` - Multi-asset trading (experimental)
+- `hype_dashboard.py` - Streamlit dashboard (connects to bot's API server)
+- `bot_api_server.py` - FastAPI server (used by bot internally, duck-typed)

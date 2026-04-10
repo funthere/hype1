@@ -1,89 +1,18 @@
-# HYPE_KING Backtesting Bot
+# HYPE/USDC Automated Trading Bot
 
-🚀 **278% Return in 90 Days** | 3.64% Max Drawdown | 42.4% Win Rate
+Modular architecture crypto trading bot for Hyperliquid DEX.
 
-## 🏆 Final Performance (90-Day Backtest)
+## Features
 
-```
-============================================================
-HYPE_KING - ULTRA OPTIMIZED MEAN REVERSION
-============================================================
-
-📊 PERFORMANCE SUMMARY
-------------------------------------------------------------
-Initial Capital:        $10,000.00
-Final Capital:          $37,825.26
-Total P&L:              $27,825.26
-Total Return:           +278.25%       🚀🚀🚀
-Max Drawdown:           3.64%          ✅ Excellent risk control!
-Sharpe Ratio:           16.10          📈 Outstanding!
-
-📈 TRADE STATISTICS
-------------------------------------------------------------
-Total Trades:           1,306
-Winning Trades:         554
-Losing Trades:          752
-Win Rate:               42.4%          ✅ Well above 26% break-even!
-Avg Win:                $108.64
-Avg Loss:               -$43.03
-Profit Factor:          1.86           ✅ $1.86 won per $1 lost!
-R:R Ratio:              2.52:1         (actual achieved)
-
-💰 COST ANALYSIS
-------------------------------------------------------------
-Gross Fees:            $5,773.68
-Maker Rebates:          $2,886.94      ✅ 50% fee reduction!
-Net Trading Cost:       $2,886.74
-```
-
-## 📁 Files
-
-- `hype_king_bot.py` - Main backtesting engine with ultra-optimized strategy
-- `run_backtest.py` - Simple runner script
-- `requirements.txt` - Python dependencies
-
-## 🎯 Strategy Configuration
-
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| Timeframe | 5 minutes | Fast action on mean reversion |
-| Leverage | 5x | Conservative for sustainability |
-| Order Type | LIMIT | Maker rebates save 50% on fees |
-| Confidence Threshold | 65 | Quality signal filter |
-| Risk per Trade | 6-14% | Dynamic based on signal strength |
-| Take Profit | 1.2-2.2x ATR | Adaptive to signal quality |
-| Stop Loss | 0.55x ATR | Fixed tight stop |
-| R:R Ratio | 2.9:1 | Expected reward-to-risk |
-
-## 🧠 Strategy Logic
-
-**Ultra-Optimized Mean Reversion with Multi-Confirmation:**
-
-1. **LONG Entry** when ALL confirm:
-   - RSI < 30 (oversold)
-   - Bollinger Band position < 10% (extreme low)
-   - Stochastic K < 25 (oversold)
-   - Price below EMA-20 (in buy zone)
-   - EMA-20 above EMA-50 (trend supports)
-
-2. **SHORT Entry** when ALL confirm:
-   - RSI > 70 (overbought)
-   - Bollinger Band position > 90% (extreme high)
-   - Stochastic K > 75 (overbought)
-   - Price above EMA-20 (in sell zone)
-   - EMA-20 below EMA-50 (trend supports)
-
-3. **Signal Strength** = Number of confirmations × 8
-   - 3 confirmations = 74 (strong signal)
-   - 5 confirmations = 90 (maximum strength)
-
-4. **Dynamic Position Sizing**:
-   - Weak signals: 6% risk
-   - Strong signals: 14% risk
-
-5. **Adaptive Take Profit**:
-   - Weak signals: 1.2x ATR
-   - Strong signals: 2.2x ATR
+- **Modular Architecture**: Clean separation of concerns for maintainability
+- **Ultra-Optimized Momentum Strategy**: Backtested strategy with strong returns
+- **Paper Trading**: Test strategies risk-free with simulated trades
+- **Testnet Support**: Validate on testnet before mainnet
+- **Real-time Dashboard**: Streamlit web interface for monitoring
+- **Risk Management**: Circuit breaker, daily loss limits, dynamic position sizing
+- **Telegram Notifications**: Trade alerts and updates
+- **Multi-Asset Support**: Trade multiple assets with correlation filtering
+- **Survival Mode**: Conservative risk profiles for production
 
 ## 🚀 Quick Start
 
@@ -91,60 +20,109 @@ Net Trading Cost:       $2,886.74
 # Install dependencies
 pip install -r requirements.txt
 
-# Run 90-day backtest
-python run_backtest.py
+# Run paper trading (no credentials needed)
+python3 run_paper_bot.py
+
+# Or use Make
+make run-paper
 ```
 
-## 📊 Performance Evolution
+For trading on testnet or mainnet, configure `.env` with your credentials.
 
-| Iteration | Return | Win Rate | Max DD | Profit Factor | Key Change |
-|-----------|--------|----------|--------|---------------|-------------|
-| Initial | -35% | 20.4% | 36.3% | 0.56 | Trend Following |
-| v2 | -7% | 25.7% | 9.0% | 0.87 | Breakout Pullback |
-| v3 | +145% | 52.4% | 3.6% | 2.17 | Mean Reversion (Market) |
-| v4 | +278% | 42.4% | 3.6% | 1.86 | Mean Reversion (LIMIT) ✅ |
+## Configuration
 
-## 💡 Key Success Factors
+Copy `.env.example` to `.env` and configure:
 
-1. **Limit Orders** - 50% fee reduction via maker rebates
-2. **Multi-Confirmation** - 5 filters ensure quality entries
-3. **Adaptive Sizing** - Stronger signals = bigger positions
-4. **Trend Filter** - Only trade with broader trend
-5. **Tight Stops** - Quick exits on failed reversions
+```bash
+# For testnet/mainnet
+PRIVATE_KEY=0x...
+ADDRESS=0x...
 
-## 📈 Using Your Own Data
+# Trading mode
+USE_TESTNET=false
+PAPER_TRADING=true
 
-```python
-from hype_king_bot import BacktestEngine, HYPEKingConfig
-import pandas as pd
-
-# Load your data
-df = pd.read_csv('your_data.csv')
-
-# Run backtest
-bot = BacktestEngine(initial_capital=10000)
-results = bot.run(df)
-bot.print_results(results)
-
-# Exports:
-# - hype_king_trades.csv (individual trades)
-# - hype_king_equity.csv (equity curve)
+# Strategy overrides (optional)
+ASSET=HYPE
+TIMEFRAME=15m
+LEVERAGE=5
+RISK_PER_TRADE_PCT=0.08
 ```
 
-## ⚙️ Customization
+## Running the Bot
 
-```python
-from hype_king_bot import HYPEKingConfig
-
-config = HYPEKingConfig()
-config.LEVERAGE = 10  # More aggression
-config.CONFIDENCE_THRESHOLD = 60  # More trades
-config.TP_ATR_MULTIPLIER = 2.0  # Different R:R
-config.USE_ADAPTIVE_RR = True  # Enable dynamic TP
+### Paper Trading (Recommended First)
+```bash
+python3 run_paper_bot.py
+# Or: make run-paper
 ```
 
-## ⚠️ Disclaimer
+### Testnet Trading
+```bash
+# Configure .env first
+python3 run_testnet_bot.py
+# Or: make run-testnet
+```
 
-This is a backtesting framework for educational purposes. Past performance does not guarantee future results. The 278% return was achieved on randomly generated sample data with specific characteristics that favor mean reversion strategies. Real market conditions will vary significantly.
+### Mainnet Trading (Real Money!)
+```bash
+# Configure .env with mainnet credentials
+python3 run_mainnet_bot.py
+# Or: make run-mainnet
+```
 
-Always test thoroughly with your own data and use proper risk management in live trading.
+### Web Dashboard
+
+Start the bot in one terminal, then in another:
+```bash
+make dashboard
+```
+
+Open http://localhost:8501 in your browser.
+
+## Architecture
+
+```
+src/
+├── core/           # Config, data models, strategy, risk management
+├── exchange/       # API connector, market data feed
+├── bot/            # Main trading bot orchestrator
+├── storage/        # SQLite database for persistence
+├── notifications/   # Telegram alerts
+└── analytics/      # Performance, health, adaptive analytics
+```
+
+See `CLAUDE.md` for detailed architecture documentation.
+
+## Testing
+
+```bash
+# Run tests
+make test
+
+# Run with coverage
+pytest --cov=src --cov-report=html
+```
+
+## Development
+
+```bash
+# Install dev dependencies
+make install
+
+# Lint code
+make lint
+
+# Format code
+make format
+```
+
+## Documentation
+
+- `CLAUDE.md` - Architecture and development guide
+- `MIGRATION_ANALYSIS.md` - Analysis of modular vs legacy architecture
+- `MODULAR_README.md` - Detailed modular architecture docs
+
+## Disclaimer
+
+This is a trading bot for educational purposes. Past performance does not guarantee future results. Always test thoroughly and use proper risk management in live trading.

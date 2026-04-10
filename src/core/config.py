@@ -162,7 +162,7 @@ class BotConfig:
                 elif attr_type == float:
                     setattr(config, key, float(value))
                 else:
-                    setattr(config, key, value)
+                    setattr(config, key, str(value))
 
         return config
 

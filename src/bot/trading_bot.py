@@ -7,7 +7,7 @@ import logging
 import os
 import signal
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 
 from ..core.config import BotConfig, Side, OrderStatus, Position, Trade
 from ..core.strategy import StrategyEngine, RiskManager
@@ -104,17 +104,17 @@ class TradingBot:
 
     # Public control methods
 
-    def pause_trading(self):
+    def pause_trading(self) -> None:
         """Pause trading (positions still managed)"""
         self._is_paused = True
         logger.info("Trading paused")
 
-    def resume_trading(self):
+    def resume_trading(self) -> None:
         """Resume trading"""
         self._is_paused = False
         logger.info("Trading resumed")
 
-    def reset_circuit_breaker(self):
+    def reset_circuit_breaker(self) -> None:
         """Manually reset circuit breaker"""
         self.circuit_breaker_triggered = False
         self.circuit_breaker_until = None
@@ -562,7 +562,7 @@ class TradingBot:
         if self.config.CIRCUIT_BREAKER_ENABLED:
             logger.info(f"Circuit Breaker: {self.config.MAX_CONSECUTIVE_LOSSES} losses -> {self.config.CIRCUIT_BREAKER_COOLDOWN_MINUTES}min cooldown")
 
-    def _start_api_server(self):
+    def _start_api_server(self) -> None:
         """Start the API server if enabled"""
         try:
             from bot_api_server import TradingBotAPI

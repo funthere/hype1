@@ -217,7 +217,7 @@ class MultiAssetStrategy:
 
         return allocations
 
-    def update_asset_price(self, asset: str, price: float):
+    def update_asset_price(self, asset: str, price: float) -> None:
         """Update price for correlation calculation"""
         self.correlation_filter.update_price(asset, price)
 

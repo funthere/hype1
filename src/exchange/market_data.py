@@ -88,7 +88,7 @@ class MarketDataFeed:
                     )
                     raise
 
-    async def disconnect(self):
+    async def disconnect(self) -> None:
         """Disconnect from WebSocket"""
         self.connected = False
         if self._ws:

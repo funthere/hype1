@@ -15,7 +15,7 @@ from ..core.config import Position, Trade, Side, OrderStatus
 logger = logging.getLogger(__name__)
 
 
-def _serialize_enum(obj):
+def _serialize_enum(obj) -> Any:
     """Convert enum values to their string values for JSON serialization"""
     if isinstance(obj, Enum):
         return obj.value
@@ -26,7 +26,7 @@ def _serialize_enum(obj):
     return obj
 
 
-def _json_dumps_safe(data):
+def _json_dumps_safe(data: Any) -> Optional[str]:
     """JSON encode with enum handling"""
     if data is None:
         return None
@@ -514,3 +514,4 @@ class CSVMigration:
 
         logger.info(f"Migrated {count} trades from {csv_path}")
         return count
+n count

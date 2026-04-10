@@ -33,7 +33,7 @@ class StrategyEngine:
         self._signals_generated = 0
         self._last_signal_time = None
 
-    def update_candle(self, candle: Dict):
+    def update_candle(self, candle: Dict) -> None:
         """
         Update internal candle storage with new data
 
@@ -202,7 +202,7 @@ class StrategyEngine:
         """Get total number of signals generated"""
         return self._signals_generated
 
-    def reset(self):
+    def reset(self) -> None:
         """Reset strategy state"""
         self.candles = pd.DataFrame()
         self._signals_generated = 0

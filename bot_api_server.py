@@ -9,7 +9,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Any, Callable
 from dataclasses import asdict
 
 import uvicorn
@@ -421,7 +421,7 @@ class TradingBotAPI:
         logger.info(f"API server running on http://{self.host}:{self.port}")
         await self.server.serve()
 
-    def start_in_background(self):
+    def start_in_background(self) -> asyncio.Task:
         """Start API server in background task"""
         task = asyncio.create_task(self.start())
         return task

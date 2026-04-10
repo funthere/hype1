@@ -101,9 +101,9 @@ dashboard: kill-dashboard-port
 # Kill bot
 kill-bot:
 	@echo "Killing running bot..."
-	@pkill -f "hype_paper_trading_bot" 2>/dev/null || echo "No paper bot process found"
-	@pkill -f "hype_testnet_bot" 2>/dev/null || true
-	@pkill -f "hype_trading_bot" 2>/dev/null || true
+	@pkill -f "run_paper_bot.py" 2>/dev/null || echo "No paper bot process found"
+	@pkill -f "run_testnet_bot.py" 2>/dev/null || echo "No testnet bot process found"
+	@pkill -f "run_mainnet_bot.py" 2>/dev/null || echo "No mainnet bot process found"
 	@make kill-port
 	@echo "✓ Bot stopped"
 
@@ -171,9 +171,9 @@ test:
 # Run linter
 lint:
 	@echo "Running linter..."
-	@ruff check src/ hype_*.py bot_api_server.py
+	@ruff check src/ run_*.py bot_api_server.py hype_dashboard.py
 
 # Format code
 format:
 	@echo "Formatting code..."
-	@ruff format src/ hype_*.py bot_api_server.py
+	@ruff format src/ run_*.py bot_api_server.py hype_dashboard.py
