@@ -7,7 +7,7 @@ import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import Any, List, Optional, Dict
 from enum import Enum
 
 from ..core.config import Position, Trade, Side, OrderStatus
@@ -514,4 +514,3 @@ class CSVMigration:
 
         logger.info(f"Migrated {count} trades from {csv_path}")
         return count
-n count

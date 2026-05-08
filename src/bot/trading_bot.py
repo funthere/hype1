@@ -49,6 +49,7 @@ class TradingBot:
         self.trades: List[Trade] = []
         self.daily_trades = 0
         self.daily_pnl = 0.0
+        self.daily_trades_list: List[Trade] = []  # Today's trades only
         self.last_trade_date = None
         self.emergency_stop = False
         self.force_close_all = False
@@ -61,6 +62,10 @@ class TradingBot:
         self.current_capital = self.starting_capital
         self.peak_equity = self.starting_capital
         self.max_drawdown_pct = 0.0
+
+        # Signal cooldown
+        self._last_signal_time: Optional[datetime] = None
+        self._signal_cooldown_seconds: int = 900  # 15 min (one 15m candle)
 
         # Circuit breaker
         self.consecutive_losses = 0
@@ -226,6 +231,12 @@ class TradingBot:
 
     async def _process_signal(self, signal: Dict):
         """Process trading signal"""
+        # Signal cooldown - prevent duplicate signals
+        if self._last_signal_time:
+            elapsed = (datetime.now() - self._last_signal_time).total_seconds()
+            if elapsed < self._signal_cooldown_seconds:
+                return
+
         # Check if we can take this trade
         can_open, reason = self.risk_manager.can_open_position(
             open_positions=len(self.positions),
@@ -249,6 +260,8 @@ class TradingBot:
 
         # Place entry order
         await self._place_entry_order(signal)
+
+        self._last_signal_time = datetime.now()
 
     async def _place_entry_order(self, signal: Dict):
         """Place entry order based on signal"""
@@ -343,12 +356,12 @@ class TradingBot:
         else:
             pnl_gross = (position.entry_price - exit_price) * position.quantity
 
-        # Apply leverage
-        pnl = pnl_gross * position.leverage
+        # PnL = (exit - entry) * qty; leverage determines margin, NOT PnL
+        pnl = pnl_gross
 
-        # Calculate fees
+        # Calculate fees - entry + exit, using taker fee for conservative estimate
         notional = position.entry_price * position.quantity
-        fees = abs(notional * self.config.MAKER_FEE_PCT * 2)  # Entry + exit
+        fees = notional * self.config.TAKER_FEE_PCT * 2  # Entry + exit
 
         # Net P&L
         net_pnl = pnl - fees
@@ -371,6 +384,7 @@ class TradingBot:
 
         # Update tracking
         self.trades.append(trade)
+        self.daily_trades_list.append(trade)
         self.daily_trades += 1
         self.daily_pnl += net_pnl
         self.current_capital += net_pnl
@@ -415,15 +429,18 @@ class TradingBot:
 
             # Save daily summary before reset
             if self.daily_trades > 0:
+                daily_wins = len([t for t in self.daily_trades_list if t.pnl > 0])
+                daily_losses = len([t for t in self.daily_trades_list if t.pnl < 0])
+                daily_fees = sum(t.fees for t in self.daily_trades_list)
                 summary = {
                     "date": self.last_trade_date.isoformat(),
                     "total_trades": self.daily_trades,
-                    "winning_trades": len([t for t in self.trades if t.pnl > 0]),
-                    "losing_trades": len([t for t in self.trades if t.pnl < 0]),
+                    "winning_trades": daily_wins,
+                    "losing_trades": daily_losses,
                     "total_pnl": self.daily_pnl,
-                    "total_fees": sum(t.fees for t in self.trades),
+                    "total_fees": daily_fees,
                     "win_rate": (
-                        len([t for t in self.trades if t.pnl > 0]) / self.daily_trades * 100
+                        daily_wins / self.daily_trades * 100
                         if self.daily_trades > 0
                         else 0
                     ),
@@ -439,6 +456,7 @@ class TradingBot:
             # Reset counters
             self.daily_trades = 0
             self.daily_pnl = 0.0
+            self.daily_trades_list = []
             self.consecutive_losses = 0
 
             logger.info(f"Daily reset - Date: {now.date()}")
@@ -490,9 +508,9 @@ class TradingBot:
 
         for position in self.positions:
             if position.side == Side.LONG:
-                pnl = (current_price - position.entry_price) * position.quantity * position.leverage
+                pnl = (current_price - position.entry_price) * position.quantity
             else:
-                pnl = (position.entry_price - current_price) * position.quantity * position.leverage
+                pnl = (position.entry_price - current_price) * position.quantity
 
             position.unrealized_pnl = pnl
             self.db.save_position(position)
@@ -561,6 +579,57 @@ class TradingBot:
 
         if self.config.CIRCUIT_BREAKER_ENABLED:
             logger.info(f"Circuit Breaker: {self.config.MAX_CONSECUTIVE_LOSSES} losses -> {self.config.CIRCUIT_BREAKER_COOLDOWN_MINUTES}min cooldown")
+
+    def print_statistics(self) -> None:
+        """Print trading statistics summary"""
+        total_trades = len(self.trades)
+        winning_trades = len([t for t in self.trades if t.pnl > 0])
+        losing_trades = len([t for t in self.trades if t.pnl < 0])
+        win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+        total_pnl = sum(t.pnl for t in self.trades)
+        total_fees = sum(t.fees for t in self.trades)
+        pnl_pct = ((self.current_capital - self.starting_capital) / self.starting_capital * 100
+                    if self.starting_capital > 0 else 0)
+
+        # Calculate average win/loss
+        avg_win = (sum(t.pnl for t in self.trades if t.pnl > 0) / winning_trades) if winning_trades > 0 else 0
+        avg_loss = (sum(t.pnl for t in self.trades if t.pnl < 0) / losing_trades) if losing_trades > 0 else 0
+
+        # Best/worst trade
+        best_trade = max((t.pnl for t in self.trades), default=0)
+        worst_trade = min((t.pnl for t in self.trades), default=0)
+
+        # Runtime
+        runtime = ""
+        if self.start_time:
+            delta = datetime.now() - self.start_time
+            hours, remainder = divmod(int(delta.total_seconds()), 3600)
+            minutes, _ = divmod(remainder, 60)
+            runtime = f"{hours}h {minutes}m"
+
+        print("\n" + "=" * 60)
+        print("TRADING BOT STATISTICS")
+        print("=" * 60)
+        print(f"Runtime:              {runtime}")
+        print(f"Starting Capital:     ${self.starting_capital:,.2f}")
+        print(f"Current Capital:      ${self.current_capital:,.2f}")
+        print(f"Total P&L:            ${total_pnl:,.2f} ({pnl_pct:+.2f}%)")
+        print(f"Total Fees:           ${total_fees:,.2f}")
+        print("-" * 60)
+        print(f"Total Trades:         {total_trades}")
+        print(f"Winning Trades:       {winning_trades}")
+        print(f"Losing Trades:        {losing_trades}")
+        print(f"Win Rate:             {win_rate:.1f}%")
+        print(f"Avg Win:              ${avg_win:,.2f}")
+        print(f"Avg Loss:             ${avg_loss:,.2f}")
+        print(f"Best Trade:           ${best_trade:,.2f}")
+        print(f"Worst Trade:          ${worst_trade:,.2f}")
+        print("-" * 60)
+        print(f"Max Drawdown:         {self.max_drawdown_pct:.2%}")
+        print(f"Open Positions:       {len(self.positions)}")
+        print(f"Consecutive Losses:   {self.consecutive_losses}")
+        print(f"Circuit Breaker:      {'ACTIVE' if self.circuit_breaker_triggered else 'Off'}")
+        print("=" * 60 + "\n")
 
     def _start_api_server(self) -> None:
         """Start the API server if enabled"""

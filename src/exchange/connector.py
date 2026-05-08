@@ -2,6 +2,7 @@
 Hyperliquid Exchange API connector using official SDK
 """
 
+import asyncio
 import logging
 from typing import List, Optional, Dict
 
@@ -64,7 +65,7 @@ class HyperliquidAPI:
             return self._asset_index
 
         try:
-            meta_data = self.info.meta()
+            meta_data = await asyncio.to_thread(self.info.meta)
 
             for i, asset in enumerate(meta_data["universe"]):
                 if asset["name"] == self.config.ASSET:
@@ -103,7 +104,8 @@ class HyperliquidAPI:
         try:
             asset_index = await self.get_asset_index()
 
-            order_result = self.exchange.order(
+            order_result = await asyncio.to_thread(
+                self.exchange.order,
                 coin=self.config.ASSET,
                 is_buy=(side == Side.LONG),
                 sz=quantity,
@@ -130,7 +132,7 @@ class HyperliquidAPI:
     async def cancel_order(self, oid: int) -> Dict:
         """Cancel order by order ID"""
         try:
-            result = self.exchange.cancel(coin=self.config.ASSET, oid=oid)
+            result = await asyncio.to_thread(self.exchange.cancel, coin=self.config.ASSET, oid=oid)
 
             if result.get("status") == "ok":
                 logger.info(f"Cancelled order {oid}")
@@ -152,7 +154,7 @@ class HyperliquidAPI:
                 cancel_list = [
                     {"coin": self.config.ASSET, "oid": o["oid"]} for o in open_orders
                 ]
-                result = self.exchange.bulk_cancel(cancel_list)
+                result = await asyncio.to_thread(self.exchange.bulk_cancel, cancel_list)
 
                 if result.get("status") == "ok":
                     logger.info(f"Cancelled {len(cancel_list)} orders")
@@ -170,7 +172,7 @@ class HyperliquidAPI:
     async def get_open_orders(self) -> List[Dict]:
         """Get all open orders for the asset"""
         try:
-            orders = self.info.open_orders(self.config.ASSET)
+            orders = await asyncio.to_thread(self.info.open_orders, self.config.ASSET)
             return orders if orders else []
         except Exception as e:
             logger.error(f"Failed to get open orders: {e}")
@@ -182,7 +184,7 @@ class HyperliquidAPI:
             if not self.address:
                 return []
 
-            user_state = self.info.user_state(self.address)
+            user_state = await asyncio.to_thread(self.info.user_state, self.address)
             asset_positions = user_state.get("assetPositions", [])
 
             positions = []
@@ -200,7 +202,7 @@ class HyperliquidAPI:
     async def get_mids(self) -> Dict:
         """Get current mid prices for all assets"""
         try:
-            return self.info.all_mids()
+            return await asyncio.to_thread(self.info.all_mids)
         except Exception as e:
             logger.error(f"Failed to get mids: {e}")
             return {}
@@ -211,7 +213,7 @@ class HyperliquidAPI:
             if not self.address:
                 return {}
 
-            user_state = self.info.user_state(self.address)
+            user_state = await asyncio.to_thread(self.info.user_state, self.address)
             margin_summary = user_state.get("marginSummary", {})
             cross_margin_summary = user_state.get("crossMarginSummary", {})
 
@@ -232,7 +234,7 @@ class HyperliquidAPI:
         try:
             if not self.address:
                 return {}
-            return self.info.user_state(self.address)
+            return await asyncio.to_thread(self.info.user_state, self.address)
         except Exception as e:
             logger.error(f"Failed to get user state: {e}")
             return {}
@@ -240,7 +242,8 @@ class HyperliquidAPI:
     async def set_leverage(self, leverage: int, is_cross: bool = True) -> Dict:
         """Set leverage for the asset"""
         try:
-            result = self.exchange.update_leverage(
+            result = await asyncio.to_thread(
+                self.exchange.update_leverage,
                 leverage=leverage, coin=self.config.ASSET, is_cross=is_cross
             )
 
@@ -276,7 +279,7 @@ class HyperliquidAPI:
             if not self.address:
                 return []
 
-            fills = self.info.user_fills(self.address)
+            fills = await asyncio.to_thread(self.info.user_fills, self.address)
             return fills[:limit] if fills else []
 
         except Exception as e:
