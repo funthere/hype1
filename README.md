@@ -125,4 +125,4 @@ make format
 
 ## Disclaimer
 
-This is a trading bot for educational purposes. Past performance does not guarantee future results. Always test thoroughly and use proper risk management in live trading.
+This is a trading bot for educational purposes. Past performance does not guarantee future results. Always test thoroughly and use proper risk management in live trading.# OpenCode test
