@@ -134,7 +134,7 @@ class TieredRiskManager:
         self.consecutive_losses = consecutive_losses
 
         # Check tier 2 (daily loss exceeded)
-        if abs(self.daily_pnl) > self.tier_2_daily_loss_pct:
+        if self.daily_pnl < -self.tier_2_daily_loss_pct:
             self.current_tier = 2
         # Check tier 1 (consecutive losses)
         elif self.consecutive_losses >= self.tier_1_after_losses:
