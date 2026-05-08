@@ -67,13 +67,13 @@ kill-dashboard-port:
 # Run paper trading bot
 run-paper: kill-port
 	@echo "Starting paper trading bot..."
-	python3 hype_paper_trading_bot.py
+	python3 run_paper_bot.py
 
 # Run testnet bot
 run-testnet: kill-port
 	@echo "Starting testnet bot..."
 	@if [ -f .env ]; then \
-		python3 hype_testnet_bot.py; \
+		python3 run_testnet_bot.py; \
 	else \
 		echo "❌ Error: .env file required for testnet trading"; \
 		echo "   Copy .env.example to .env and fill in your credentials"; \
@@ -86,7 +86,7 @@ run-mainnet: kill-port
 	@echo "Press Ctrl+C within 5 seconds to cancel..."
 	@sleep 5
 	@if [ -f .env ]; then \
-		HYPERLICUID_TESTNET=false python3 -c "from hype_trading_bot import create_bot_config, TradingBot; import asyncio; config = create_bot_config(os.environ.get('PRIVATE_KEY'), os.environ.get('ADDRESS'), testnet=False); bot = TradingBot(config); asyncio.run(bot.start())"; \
+		python3 run_mainnet_bot.py; \
 	else \
 		echo "❌ Error: .env file required for mainnet trading"; \
 		echo "   Copy .env.example to .env and fill in your credentials"; \
@@ -171,9 +171,9 @@ test:
 # Run linter
 lint:
 	@echo "Running linter..."
-	@ruff check src/ run_*.py bot_api_server.py hype_dashboard.py
+	@ruff check src/ tests/ run_*.py bot_api_server.py hype_dashboard.py
 
 # Format code
 format:
 	@echo "Formatting code..."
-	@ruff format src/ run_*.py bot_api_server.py hype_dashboard.py
+	@ruff format src/ tests/ run_*.py bot_api_server.py hype_dashboard.py
