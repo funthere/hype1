@@ -11,10 +11,14 @@ from typing import Optional, List, Dict, Any
 
 from ..core.config import BotConfig, Side, OrderStatus, Position, Trade
 from ..core.strategy import StrategyEngine, RiskManager
+from ..core.survival_risk import SurvivalRiskManager
 from ..exchange.connector import HyperliquidAPI
 from ..exchange.market_data import MarketDataFeed
 from ..storage.database import DatabaseManager
 from ..notifications.telegram import TelegramNotifier
+from ..analytics.adaptive import AdaptiveParameterManager
+from ..analytics.health import HealthMonitor
+from ..analytics.performance import PerformanceAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +70,16 @@ class TradingBot:
         # Signal cooldown
         self._last_signal_time: Optional[datetime] = None
         self._signal_cooldown_seconds: int = 900  # 15 min (one 15m candle)
+
+        # Advanced modules (Phase 2 integration)
+        self.survival_risk = SurvivalRiskManager(config)
+        self.adaptive_params = AdaptiveParameterManager(config)
+        self.health_monitor = HealthMonitor()
+        self.performance_analyzer = PerformanceAnalyzer(self.starting_capital)
+        
+        # Cached market data
+        self._cached_mids: Dict[str, float] = {}
+        self._mids_last_update: Optional[datetime] = None
 
         # Circuit breaker
         self.consecutive_losses = 0
@@ -225,6 +239,12 @@ class TradingBot:
     async def _on_candle_update(self, candle: Dict):
         """Handle candle update from WebSocket"""
         self.strategy.update_candle(candle)
+        # Update adaptive parameters with new price
+        current_price = float(candle.get('close', 0))
+        if current_price > 0:
+            self.adaptive_params.update_market_data(current_price)
+            self._cached_mids[self.config.ASSET] = current_price
+            self._mids_last_update = datetime.now()
         await self._update_unrealized_pnl()
 
     # Trading logic
@@ -257,6 +277,32 @@ class TradingBot:
         )
         if signal["confidence"] < min_conf:
             return
+
+        # Survival risk check (Phase 2)
+        if not self.config.PAPER_TRADING or True:  # Always check
+            mids = await self.api.get_mids()
+            current_price = float(mids.get(self.config.ASSET, 0))
+            if current_price > 0:
+                test_position = Position(
+                    side=signal["action"],
+                    entry_price=signal["entry_price"],
+                    quantity=signal["quantity"],
+                    tp_price=signal["tp_price"],
+                    sl_price=signal["sl_price"],
+                    entry_time=datetime.now(),
+                    leverage=self.config.LEVERAGE,
+                )
+                can_open_survival, survival_reason = self.survival_risk.can_open_position(
+                    position=test_position,
+                    existing_positions=self.positions,
+                    capital=self.current_capital,
+                    current_price=current_price,
+                    daily_pnl=self.daily_pnl,
+                    consecutive_losses=self.consecutive_losses,
+                )
+                if not can_open_survival:
+                    logger.info(f"Survival risk blocked: {survival_reason}")
+                    return
 
         # Place entry order
         await self._place_entry_order(signal)
@@ -311,8 +357,14 @@ class TradingBot:
         if not self.positions:
             return
 
-        mids = await self.api.get_mids()
-        current_price = float(mids.get(self.config.ASSET, 0))
+        # Use cached mids from WebSocket if recent (< 30s), otherwise fetch
+        if (self._mids_last_update and 
+            (datetime.now() - self._mids_last_update).total_seconds() < 30 and
+            self.config.ASSET in self._cached_mids):
+            current_price = self._cached_mids[self.config.ASSET]
+        else:
+            mids = await self.api.get_mids()
+            current_price = float(mids.get(self.config.ASSET, 0))
 
         if current_price == 0:
             return
@@ -389,6 +441,14 @@ class TradingBot:
         self.daily_pnl += net_pnl
         self.current_capital += net_pnl
 
+        # Update survival risk manager
+        self.survival_risk.update_after_trade(trade, self.current_capital, datetime.now())
+        self.survival_risk.tiered_risk.update(trade, self.daily_pnl, self.consecutive_losses)
+        
+        # Record trade for adaptive parameters and performance analysis
+        self.adaptive_params.record_trade(trade)
+        self.performance_analyzer.add_trade(trade)
+
         # Update consecutive losses tracking
         if net_pnl < 0:
             self.consecutive_losses += 1
@@ -459,6 +519,9 @@ class TradingBot:
             self.daily_trades_list = []
             self.consecutive_losses = 0
 
+            # Reset survival risk
+            self.survival_risk.tiered_risk.reset()
+
             logger.info(f"Daily reset - Date: {now.date()}")
 
     async def _check_circuit_breaker_cooldown(self):
@@ -500,8 +563,14 @@ class TradingBot:
         if not self.positions:
             return
 
-        mids = await self.api.get_mids()
-        current_price = float(mids.get(self.config.ASSET, 0))
+        # Use cached mids from WebSocket if recent (< 30s), otherwise fetch
+        if (self._mids_last_update and 
+            (datetime.now() - self._mids_last_update).total_seconds() < 30 and
+            self.config.ASSET in self._cached_mids):
+            current_price = self._cached_mids[self.config.ASSET]
+        else:
+            mids = await self.api.get_mids()
+            current_price = float(mids.get(self.config.ASSET, 0))
 
         if current_price == 0:
             return
@@ -525,8 +594,14 @@ class TradingBot:
 
         logger.warning(f"[{reason}] Closing {len(self.positions)} position(s)...")
 
-        mids = await self.api.get_mids()
-        current_price = float(mids.get(self.config.ASSET, 0))
+        # Use cached mids from WebSocket if recent (< 30s), otherwise fetch
+        if (self._mids_last_update and 
+            (datetime.now() - self._mids_last_update).total_seconds() < 30 and
+            self.config.ASSET in self._cached_mids):
+            current_price = self._cached_mids[self.config.ASSET]
+        else:
+            mids = await self.api.get_mids()
+            current_price = float(mids.get(self.config.ASSET, 0))
 
         positions_to_close = self.positions[:]
 
@@ -629,6 +704,36 @@ class TradingBot:
         print(f"Open Positions:       {len(self.positions)}")
         print(f"Consecutive Losses:   {self.consecutive_losses}")
         print(f"Circuit Breaker:      {'ACTIVE' if self.circuit_breaker_triggered else 'Off'}")
+
+        # Performance analytics (Phase 2)
+        if self.trades:
+            try:
+                metrics = self.performance_analyzer.calculate_metrics()
+                print("-" * 60)
+                print("PERFORMANCE ANALYTICS")
+                print("-" * 60)
+                print(f"Sharpe Ratio:          {metrics.sharpe_ratio:.2f}")
+                print(f"Sortino Ratio:         {metrics.sortino_ratio:.2f}")
+                print(f"Calmar Ratio:          {metrics.calmar_ratio:.2f}")
+                print(f"Profit Factor:         {metrics.profit_factor:.2f}")
+                print(f"Max Winning Streak:    {metrics.max_winning_streak}")
+                print(f"Max Losing Streak:     {metrics.max_losing_streak}")
+            except Exception:
+                pass
+        
+        # Adaptive parameters
+        try:
+            params = self.adaptive_params.get_parameters()
+            print("-" * 60)
+            print("ADAPTIVE PARAMETERS")
+            print("-" * 60)
+            print(f"Volatility Regime:     {params.volatility_regime.value}")
+            print(f"Market Phase:          {params.market_phase.value}")
+            print(f"Adjusted Leverage:     {params.leverage}x")
+            print(f"Adjusted Risk:         {params.risk_per_trade:.1%}")
+        except Exception:
+            pass
+
         print("=" * 60 + "\n")
 
     def _start_api_server(self) -> None:

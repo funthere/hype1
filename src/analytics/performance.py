@@ -593,4 +593,4 @@ class PerformanceAnalyzer:
         avg_trades_per_week=metrics.avg_trades_per_week,
     )
 
-    return report
+        return report
