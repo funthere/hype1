@@ -2,12 +2,21 @@
 Integration tests for Exchange connector
 """
 
+import asyncio
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime
 
 from src.core.config import BotConfig, Side
 from src.exchange.connector import HyperliquidAPI
+
+
+@pytest.fixture(autouse=True)
+def mock_to_thread(monkeypatch):
+    """Make asyncio.to_thread call functions directly for testing"""
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
 
 
 @pytest.mark.integration
@@ -54,6 +63,9 @@ class TestHyperliquidAPIIntegration:
                     mock_account_instance = Mock()
                     mock_account_instance.from_key = Mock(return_value=mock_account_instance)
                     mock_account_instance.address = "0xTestAddress"
+                    
+                    # Link mock exchange instance so Exchange(...) returns it
+                    mock_exchange.return_value = mock_exchange_instance
                     
                     # Create API instance
                     api = HyperliquidAPI(mock_config)
