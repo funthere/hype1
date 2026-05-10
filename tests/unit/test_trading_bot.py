@@ -101,6 +101,11 @@ def create_bot(config=None, mocks=None):
         bot.risk_manager = mocks["rm"]
         bot.db = mocks["db"]
         bot.telegram = mocks["tg"]
+        # Mock survival risk manager to always allow trades
+        bot.survival_risk = Mock()
+        bot.survival_risk.can_open_position = Mock(return_value=(True, ""))
+        bot.survival_risk.update_after_trade = Mock()
+        bot.survival_risk.tiered_risk = Mock()
     return bot
 
 
