@@ -83,9 +83,7 @@ class MarketDataFeed:
                     )
                     await asyncio.sleep(delay)
                 else:
-                    logger.error(
-                        f"Max reconnection attempts reached. Giving up."
-                    )
+                    logger.error("Max reconnection attempts reached. Giving up.")
                     raise
 
     async def disconnect(self) -> None:
@@ -107,7 +105,9 @@ class MarketDataFeed:
         }
 
         await ws.send(json.dumps(subscribe_msg))
-        logger.info(f"Subscribed to {self.config.ASSET} {self.config.TIMEFRAME} candles")
+        logger.info(
+            f"Subscribed to {self.config.ASSET} {self.config.TIMEFRAME} candles"
+        )
 
     async def _listen(self):
         """Listen for incoming WebSocket messages"""

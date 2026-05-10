@@ -2,12 +2,9 @@
 Unit tests for Strategy Engine
 """
 
-import pytest
-import pandas as pd
-import numpy as np
 from datetime import datetime
 
-from src.core.config import BotConfig, Side
+from src.core.config import Side
 from src.core.strategy import StrategyEngine, RiskManager
 
 
@@ -47,14 +44,16 @@ class TestStrategyEngine:
         """Test signal generation with insufficient data"""
         # Add only 10 candles (less than required 30)
         for i in range(10):
-            strategy_engine.update_candle({
-                "timestamp": datetime.now(),
-                "open": 100.0,
-                "high": 101.0,
-                "low": 99.0,
-                "close": 100.5,
-                "volume": 10000
-            })
+            strategy_engine.update_candle(
+                {
+                    "timestamp": datetime.now(),
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.5,
+                    "volume": 10000,
+                }
+            )
 
         signal = strategy_engine.generate_signal()
 
@@ -102,7 +101,9 @@ class TestStrategyEngine:
         entry_price = 100
         stop_price = 98  # Note: stop_price is not used in current implementation
 
-        quantity = strategy_engine._calculate_position_size(capital, entry_price, stop_price)
+        quantity = strategy_engine._calculate_position_size(
+            capital, entry_price, stop_price
+        )
 
         assert quantity > 0
         assert isinstance(quantity, float)
@@ -165,7 +166,7 @@ class TestRiskManager:
             open_positions=0,
             daily_trades=5,
             daily_pnl=100,
-            circuit_breaker_active=False
+            circuit_breaker_active=False,
         )
 
         assert can_open is True
@@ -177,7 +178,7 @@ class TestRiskManager:
             open_positions=2,  # MAX_POSITIONS
             daily_trades=5,
             daily_pnl=100,
-            circuit_breaker_active=False
+            circuit_breaker_active=False,
         )
 
         assert can_open is False
@@ -189,7 +190,7 @@ class TestRiskManager:
             open_positions=0,
             daily_trades=20,  # MAX_DAILY_TRADES
             daily_pnl=100,
-            circuit_breaker_active=False
+            circuit_breaker_active=False,
         )
 
         assert can_open is False
@@ -201,7 +202,7 @@ class TestRiskManager:
             open_positions=0,
             daily_trades=5,
             daily_pnl=-2000,  # 20% loss on 10k capital (exceeds 15% limit)
-            circuit_breaker_active=False
+            circuit_breaker_active=False,
         )
 
         assert can_open is False
@@ -210,10 +211,7 @@ class TestRiskManager:
     def test_can_open_position_circuit_breaker(self, risk_manager):
         """Test position opening check when circuit breaker is active"""
         can_open, reason = risk_manager.can_open_position(
-            open_positions=0,
-            daily_trades=5,
-            daily_pnl=100,
-            circuit_breaker_active=True
+            open_positions=0, daily_trades=5, daily_pnl=100, circuit_breaker_active=True
         )
 
         assert can_open is False
@@ -225,7 +223,9 @@ class TestRiskManager:
         entry_price = 100
         stop_price = 98
 
-        quantity = risk_manager.calculate_position_size(capital, entry_price, stop_price)
+        quantity = risk_manager.calculate_position_size(
+            capital, entry_price, stop_price
+        )
 
         assert quantity > 0
         assert isinstance(quantity, float)
@@ -268,7 +268,7 @@ class TestIntegration:
                 open_positions=0,
                 daily_trades=0,
                 daily_pnl=0,
-                circuit_breaker_active=False
+                circuit_breaker_active=False,
             )
 
             assert can_open is True
@@ -277,7 +277,7 @@ class TestIntegration:
             quantity = risk.calculate_position_size(
                 capital=sample_config.PAPER_CAPITAL,
                 entry_price=signal["entry_price"],
-                stop_price=signal["sl_price"]
+                stop_price=signal["sl_price"],
             )
 
             assert quantity > 0

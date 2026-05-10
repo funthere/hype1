@@ -11,15 +11,14 @@ Calculates advanced trading metrics including:
 """
 
 import logging
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Tuple
+from datetime import datetime
+from typing import List, Optional, Tuple
 from dataclasses import dataclass
-from collections import defaultdict
 
 import numpy as np
 import pandas as pd
 
-from ..core.config import Trade, Position, Side
+from ..core.config import Trade
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +26,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PerformanceMetrics:
     """Container for performance metrics"""
+
     # Return metrics
     total_return: float
     annualized_return: float
@@ -108,7 +108,9 @@ class PerformanceAnalyzer:
         timestamp = trade.exit_time or datetime.now()
         self.equity_curve.append((timestamp, new_equity))
 
-    def calculate_metrics(self, trades: Optional[List[Trade]] = None) -> PerformanceMetrics:
+    def calculate_metrics(
+        self, trades: Optional[List[Trade]] = None
+    ) -> PerformanceMetrics:
         """
         Calculate all performance metrics
 
@@ -132,42 +134,35 @@ class PerformanceAnalyzer:
             "total_return": self._total_return(df),
             "annualized_return": self._annualized_return(df),
             "cagr": self._cagr(df),
-
             # Risk metrics
             "volatility": self._volatility(df),
             "max_drawdown": self._max_drawdown(df),
             "avg_drawdown": self._avg_drawdown(df),
-
             # Risk-adjusted returns
             "sharpe_ratio": self._sharpe_ratio(df),
             "sortino_ratio": self._sortino_ratio(df),
             "calmar_ratio": self._calmar_ratio(df),
-
             # Trade statistics
             "total_trades": len(df),
-            "winning_trades": len(df[df['pnl'] > 0]),
-            "losing_trades": len(df[df['pnl'] < 0]),
+            "winning_trades": len(df[df["pnl"] > 0]),
+            "losing_trades": len(df[df["pnl"] < 0]),
             "win_rate": self._win_rate(df),
             "profit_factor": self._profit_factor(df),
-
             # P&L statistics
             "avg_win": self._avg_win(df),
             "avg_loss": self._avg_loss(df),
             "largest_win": self._largest_win(df),
             "largest_loss": self._largest_loss(df),
             "avg_trade": self._avg_trade(df),
-
             # Duration statistics
             "avg_trade_duration": self._avg_duration(df),
             "avg_win_duration": self._avg_win_duration(df),
             "avg_loss_duration": self._avg_loss_duration(df),
-
             # Streaks
             "max_winning_streak": self._max_winning_streak(df),
             "max_losing_streak": self._max_losing_streak(df),
             "current_streak": self._current_streak(df)[0],
             "current_streak_type": self._current_streak(df)[1],
-
             # Frequency
             "avg_trades_per_day": self._avg_trades_per_day(df),
             "avg_trades_per_week": self._avg_trades_per_week(df),
@@ -182,27 +177,31 @@ class PerformanceAnalyzer:
         for trade in trades:
             duration = None
             if trade.entry_time and trade.exit_time:
-                duration = (trade.exit_time - trade.entry_time).total_seconds() / 3600  # hours
+                duration = (
+                    trade.exit_time - trade.entry_time
+                ).total_seconds() / 3600  # hours
 
-            data.append({
-                "side": trade.side.value,
-                "entry_price": trade.entry_price,
-                "exit_price": trade.exit_price,
-                "quantity": trade.quantity,
-                "entry_time": trade.entry_time,
-                "exit_time": trade.exit_time,
-                "pnl": trade.pnl,
-                "fees": trade.fees,
-                "net_pnl": trade.pnl - trade.fees,
-                "duration_hours": duration
-            })
+            data.append(
+                {
+                    "side": trade.side.value,
+                    "entry_price": trade.entry_price,
+                    "exit_price": trade.exit_price,
+                    "quantity": trade.quantity,
+                    "entry_time": trade.entry_time,
+                    "exit_time": trade.exit_time,
+                    "pnl": trade.pnl,
+                    "fees": trade.fees,
+                    "net_pnl": trade.pnl - trade.fees,
+                    "duration_hours": duration,
+                }
+            )
 
         df = pd.DataFrame(data)
 
         # Sort by exit time
-        if 'exit_time' in df.columns and not df['exit_time'].isna().all():
-            df['exit_time'] = pd.to_datetime(df['exit_time'])
-            df = df.sort_values('exit_time')
+        if "exit_time" in df.columns and not df["exit_time"].isna().all():
+            df["exit_time"] = pd.to_datetime(df["exit_time"])
+            df = df.sort_values("exit_time")
 
         return df
 
@@ -210,7 +209,7 @@ class PerformanceAnalyzer:
 
     def _total_return(self, df: pd.DataFrame) -> float:
         """Calculate total return percentage"""
-        total_pnl = df['pnl'].sum()
+        total_pnl = df["pnl"].sum()
         return (total_pnl / self.initial_capital) * 100
 
     def _annualized_return(self, df: pd.DataFrame) -> float:
@@ -221,8 +220,8 @@ class PerformanceAnalyzer:
             return 0.0
 
         # Calculate time span in years
-        start = df['exit_time'].min()
-        end = df['exit_time'].max()
+        start = df["exit_time"].min()
+        end = df["exit_time"].max()
         years = (end - start).total_seconds() / (365.25 * 24 * 3600)
 
         if years <= 0:
@@ -232,13 +231,13 @@ class PerformanceAnalyzer:
 
     def _cagr(self, df: pd.DataFrame) -> float:
         """Calculate Compound Annual Growth Rate"""
-        final_value = self.initial_capital + df['pnl'].sum()
+        final_value = self.initial_capital + df["pnl"].sum()
 
         if len(df) < 2:
             return 0.0
 
-        start = df['exit_time'].min()
-        end = df['exit_time'].max()
+        start = df["exit_time"].min()
+        end = df["exit_time"].max()
         years = (end - start).total_seconds() / (365.25 * 24 * 3600)
 
         if years <= 0:
@@ -253,7 +252,7 @@ class PerformanceAnalyzer:
         if len(df) < 2:
             return 0.0
 
-        returns = df['pnl'] / self.initial_capital
+        returns = df["pnl"] / self.initial_capital
         return returns.std() * np.sqrt(252) * 100  # Annualized, assuming daily trades
 
     def _max_drawdown(self, df: pd.DataFrame) -> float:
@@ -261,7 +260,7 @@ class PerformanceAnalyzer:
         if len(df) < 1:
             return 0.0
 
-        cumulative = df['pnl'].cumsum()
+        cumulative = df["pnl"].cumsum()
         running_max = cumulative.cummax()
         drawdown = (cumulative - running_max) / self.initial_capital * 100
 
@@ -272,7 +271,7 @@ class PerformanceAnalyzer:
         if len(df) < 2:
             return 0.0
 
-        cumulative = df['pnl'].cumsum()
+        cumulative = df["pnl"].cumsum()
         running_max = cumulative.cummax()
         drawdown = (cumulative - running_max) / self.initial_capital * 100
 
@@ -291,8 +290,10 @@ class PerformanceAnalyzer:
         if len(df) < 2:
             return 0.0
 
-        excess_returns = (df['pnl'].mean() / self.initial_capital) - (self.RISK_FREE_RATE / 252)
-        volatility = df['pnl'].std() / self.initial_capital
+        excess_returns = (df["pnl"].mean() / self.initial_capital) - (
+            self.RISK_FREE_RATE / 252
+        )
+        volatility = df["pnl"].std() / self.initial_capital
 
         if volatility == 0:
             return 0.0
@@ -304,14 +305,14 @@ class PerformanceAnalyzer:
         if len(df) < 2:
             return 0.0
 
-        mean_return = df['pnl'].mean() / self.initial_capital
+        mean_return = df["pnl"].mean() / self.initial_capital
         excess_return = mean_return - (self.RISK_FREE_RATE / 252)
 
         # Downside deviation (only negative returns)
-        negative_returns = df['pnl'][df['pnl'] < 0] / self.initial_capital
+        negative_returns = df["pnl"][df["pnl"] < 0] / self.initial_capital
 
         if len(negative_returns) == 0:
-            return float('inf') if excess_return > 0 else 0.0
+            return float("inf") if excess_return > 0 else 0.0
 
         downside_deviation = negative_returns.std()
 
@@ -337,16 +338,16 @@ class PerformanceAnalyzer:
         if len(df) == 0:
             return 0.0
 
-        winning = len(df[df['pnl'] > 0])
+        winning = len(df[df["pnl"] > 0])
         return (winning / len(df)) * 100
 
     def _profit_factor(self, df: pd.DataFrame) -> float:
         """Calculate profit factor (gross wins / gross losses)"""
-        gross_wins = df[df['pnl'] > 0]['pnl'].sum()
-        gross_losses = abs(df[df['pnl'] < 0]['pnl'].sum())
+        gross_wins = df[df["pnl"] > 0]["pnl"].sum()
+        gross_losses = abs(df[df["pnl"] < 0]["pnl"].sum())
 
         if gross_losses == 0:
-            return 0.0 if gross_wins == 0 else float('inf')
+            return 0.0 if gross_wins == 0 else float("inf")
 
         return gross_wins / gross_losses
 
@@ -354,64 +355,64 @@ class PerformanceAnalyzer:
 
     def _avg_win(self, df: pd.DataFrame) -> float:
         """Calculate average winning trade"""
-        wins = df[df['pnl'] > 0]['pnl']
+        wins = df[df["pnl"] > 0]["pnl"]
         return wins.mean() if len(wins) > 0 else 0.0
 
     def _avg_loss(self, df: pd.DataFrame) -> float:
         """Calculate average losing trade (negative value)"""
-        losses = df[df['pnl'] < 0]['pnl']
+        losses = df[df["pnl"] < 0]["pnl"]
         return losses.mean() if len(losses) > 0 else 0.0
 
     def _largest_win(self, df: pd.DataFrame) -> float:
         """Calculate largest winning trade"""
-        wins = df[df['pnl'] > 0]['pnl']
+        wins = df[df["pnl"] > 0]["pnl"]
         return wins.max() if len(wins) > 0 else 0.0
 
     def _largest_loss(self, df: pd.DataFrame) -> float:
         """Calculate largest losing trade (negative value)"""
-        losses = df[df['pnl'] < 0]['pnl']
+        losses = df[df["pnl"] < 0]["pnl"]
         return losses.min() if len(losses) > 0 else 0.0
 
     def _avg_trade(self, df: pd.DataFrame) -> float:
         """Calculate average trade P&L"""
-        return df['pnl'].mean() if len(df) > 0 else 0.0
+        return df["pnl"].mean() if len(df) > 0 else 0.0
 
     # Duration statistics
 
     def _avg_duration(self, df: pd.DataFrame) -> float:
         """Calculate average trade duration in hours"""
-        durations = df['duration_hours'].dropna()
+        durations = df["duration_hours"].dropna()
         return durations.mean() if len(durations) > 0 else 0.0
 
     def _avg_win_duration(self, df: pd.DataFrame) -> float:
         """Calculate average winning trade duration"""
-        wins = df[df['pnl'] > 0]['duration_hours'].dropna()
+        wins = df[df["pnl"] > 0]["duration_hours"].dropna()
         return wins.mean() if len(wins) > 0 else 0.0
 
     def _avg_loss_duration(self, df: pd.DataFrame) -> float:
         """Calculate average losing trade duration"""
-        losses = df[df['pnl'] < 0]['duration_hours'].dropna()
+        losses = df[df["pnl"] < 0]["duration_hours"].dropna()
         return losses.mean() if len(losses) > 0 else 0.0
 
     # Streaks
 
     def _max_winning_streak(self, df: pd.DataFrame) -> int:
         """Calculate maximum consecutive winning trades"""
-        df['win'] = df['pnl'] > 0
-        df['streak_group'] = (df['win'] != df['win'].shift()).cumsum()
+        df["win"] = df["pnl"] > 0
+        df["streak_group"] = (df["win"] != df["win"].shift()).cumsum()
 
-        streaks = df.groupby(['win', 'streak_group']).size().reset_index(name='count')
-        winning_streaks = streaks[streaks['win'] == True]['count']
+        streaks = df.groupby(["win", "streak_group"]).size().reset_index(name="count")
+        winning_streaks = streaks[streaks["win"]]["count"]
 
         return winning_streaks.max() if len(winning_streaks) > 0 else 0
 
     def _max_losing_streak(self, df: pd.DataFrame) -> int:
         """Calculate maximum consecutive losing trades"""
-        df['win'] = df['pnl'] > 0
-        df['streak_group'] = (df['win'] != df['win'].shift()).cumsum()
+        df["win"] = df["pnl"] > 0
+        df["streak_group"] = (df["win"] != df["win"].shift()).cumsum()
 
-        streaks = df.groupby(['win', 'streak_group']).size().reset_index(name='count')
-        losing_streaks = streaks[streaks['win'] == False]['count']
+        streaks = df.groupby(["win", "streak_group"]).size().reset_index(name="count")
+        losing_streaks = streaks[not streaks["win"]]["count"]
 
         return losing_streaks.max() if len(losing_streaks) > 0 else 0
 
@@ -422,10 +423,10 @@ class PerformanceAnalyzer:
 
         # Work backwards from last trade
         current_count = 1
-        is_winning = df.iloc[-1]['pnl'] > 0
+        is_winning = df.iloc[-1]["pnl"] > 0
 
         for i in range(len(df) - 2, -1, -1):
-            if (df.iloc[i]['pnl'] > 0) == is_winning:
+            if (df.iloc[i]["pnl"] > 0) == is_winning:
                 current_count += 1
             else:
                 break
@@ -439,8 +440,8 @@ class PerformanceAnalyzer:
         if len(df) < 2:
             return 0.0
 
-        start = df['exit_time'].min()
-        end = df['exit_time'].max()
+        start = df["exit_time"].min()
+        end = df["exit_time"].max()
         days = (end - start).total_seconds() / (24 * 3600)
 
         if days <= 0:
@@ -563,34 +564,34 @@ class PerformanceAnalyzer:
   Trades per Day:      {avg_trades_per_day:>8.2f}
   Trades per Week:     {avg_trades_per_week:>8.2f}
 """.format(
-        total_return=metrics.total_return,
-        annualized_return=metrics.annualized_return,
-        cagr=metrics.cagr,
-        volatility=metrics.volatility,
-        max_drawdown=metrics.max_drawdown,
-        avg_drawdown=metrics.avg_drawdown,
-        sharpe_ratio=metrics.sharpe_ratio,
-        sortino_ratio=metrics.sortino_ratio,
-        calmar_ratio=metrics.calmar_ratio,
-        total_trades=metrics.total_trades,
-        winning_trades=metrics.winning_trades,
-        losing_trades=metrics.losing_trades,
-        win_rate=metrics.win_rate,
-        profit_factor=metrics.profit_factor,
-        avg_win=metrics.avg_win,
-        avg_loss=metrics.avg_loss,
-        largest_win=metrics.largest_win,
-        largest_loss=metrics.largest_loss,
-        avg_trade=metrics.avg_trade,
-        avg_trade_duration=metrics.avg_trade_duration,
-        avg_win_duration=metrics.avg_win_duration,
-        avg_loss_duration=metrics.avg_loss_duration,
-        max_winning_streak=metrics.max_winning_streak,
-        max_losing_streak=metrics.max_losing_streak,
-        current_streak=metrics.current_streak,
-        current_streak_type=metrics.current_streak_type,
-        avg_trades_per_day=metrics.avg_trades_per_day,
-        avg_trades_per_week=metrics.avg_trades_per_week,
-    )
+            total_return=metrics.total_return,
+            annualized_return=metrics.annualized_return,
+            cagr=metrics.cagr,
+            volatility=metrics.volatility,
+            max_drawdown=metrics.max_drawdown,
+            avg_drawdown=metrics.avg_drawdown,
+            sharpe_ratio=metrics.sharpe_ratio,
+            sortino_ratio=metrics.sortino_ratio,
+            calmar_ratio=metrics.calmar_ratio,
+            total_trades=metrics.total_trades,
+            winning_trades=metrics.winning_trades,
+            losing_trades=metrics.losing_trades,
+            win_rate=metrics.win_rate,
+            profit_factor=metrics.profit_factor,
+            avg_win=metrics.avg_win,
+            avg_loss=metrics.avg_loss,
+            largest_win=metrics.largest_win,
+            largest_loss=metrics.largest_loss,
+            avg_trade=metrics.avg_trade,
+            avg_trade_duration=metrics.avg_trade_duration,
+            avg_win_duration=metrics.avg_win_duration,
+            avg_loss_duration=metrics.avg_loss_duration,
+            max_winning_streak=metrics.max_winning_streak,
+            max_losing_streak=metrics.max_losing_streak,
+            current_streak=metrics.current_streak,
+            current_streak_type=metrics.current_streak_type,
+            avg_trades_per_day=metrics.avg_trades_per_day,
+            avg_trades_per_week=metrics.avg_trades_per_week,
+        )
 
         return report

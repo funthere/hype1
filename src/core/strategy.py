@@ -47,7 +47,7 @@ class StrategyEngine:
 
         # Keep only recent candles
         if len(self.candles) > self.max_candles:
-            self.candles = self.candles.iloc[-self.max_candles:]
+            self.candles = self.candles.iloc[-self.max_candles :]
 
     def generate_signal(self, capital: float = None) -> Optional[Dict]:
         """
@@ -110,9 +110,7 @@ class StrategyEngine:
         # Determine capital for position sizing
         if capital is None:
             capital = (
-                self.config.PAPER_CAPITAL
-                if self.config.PAPER_TRADING
-                else 10000.0
+                self.config.PAPER_CAPITAL if self.config.PAPER_TRADING else 10000.0
             )
 
         # Generate signals
@@ -250,7 +248,10 @@ class RiskManager:
             return False, f"Max daily trades ({self.config.MAX_DAILY_TRADES}) reached"
 
         if daily_pnl < -self.config.MAX_DAILY_LOSS_PCT * self.starting_capital:
-            return False, f"Daily loss limit ({self.config.MAX_DAILY_LOSS_PCT:.1%}) reached"
+            return (
+                False,
+                f"Daily loss limit ({self.config.MAX_DAILY_LOSS_PCT:.1%}) reached",
+            )
 
         return True, ""
 

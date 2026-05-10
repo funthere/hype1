@@ -2,10 +2,9 @@
 Telegram notification system for trading bot alerts
 """
 
-import asyncio
 import logging
 from datetime import datetime
-from typing import Optional, Dict, List
+from typing import Optional, Dict
 
 import httpx
 
@@ -71,7 +70,11 @@ class TelegramNotifier:
 
             response = await self._client.post(
                 f"{self.api_url}/sendMessage",
-                json={"chat_id": self.chat_id, "text": message, "parse_mode": parse_mode},
+                json={
+                    "chat_id": self.chat_id,
+                    "text": message,
+                    "parse_mode": parse_mode,
+                },
             )
 
             if response.status_code == 200:
@@ -118,7 +121,11 @@ class TelegramNotifier:
         )
 
     def format_circuit_breaker(
-        self, triggered: bool, consecutive_losses: int, max_losses: int, cooldown_minutes: int = 30
+        self,
+        triggered: bool,
+        consecutive_losses: int,
+        max_losses: int,
+        cooldown_minutes: int = 30,
     ) -> str:
         """Format circuit breaker notification"""
         if triggered:
@@ -182,7 +189,7 @@ class TelegramNotifier:
 
     def format_shutdown_notification(self, reason: str = "") -> str:
         """Format bot shutdown notification"""
-        msg = f"🛑 *Trading Bot Stopped*\n"
+        msg = "🛑 *Trading Bot Stopped*\n"
         if reason:
             msg += f"Reason: `{reason}`\n"
         msg += f"Time: `{datetime.now().strftime('%H:%M:%S')}`"
@@ -201,7 +208,11 @@ class TelegramNotifier:
         return await self._send_message(message)
 
     async def notify_circuit_breaker(
-        self, triggered: bool, consecutive_losses: int, max_losses: int, cooldown_minutes: int = 30
+        self,
+        triggered: bool,
+        consecutive_losses: int,
+        max_losses: int,
+        cooldown_minutes: int = 30,
     ) -> bool:
         """Send circuit breaker notification"""
         message = self.format_circuit_breaker(
@@ -250,7 +261,9 @@ class TelegramNotifier:
 
     async def test_connection(self) -> bool:
         """Test Telegram connection by sending a test message"""
-        return await self._send_message("✅ *Test Message*\nTrading bot notifications are working!")
+        return await self._send_message(
+            "✅ *Test Message*\nTrading bot notifications are working!"
+        )
 
     def disable(self) -> None:
         """Disable notifications (for testing/maintenance)"""

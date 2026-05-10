@@ -2,11 +2,10 @@
 Unit tests for Multi-Asset Strategy
 """
 
-import pytest
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from src.core.config import BotConfig, Side, Position
+from src.core.config import Side, Position
 from src.core.multi_asset import (
     AssetConfig,
     MultiAssetSignal,
@@ -27,7 +26,7 @@ class TestAssetConfig:
             weight=1.0,
             max_positions=2,
             min_signal_confidence=50,
-            enabled=True
+            enabled=True,
         )
 
         assert config.symbol == "HYPE"
@@ -50,7 +49,7 @@ class TestMultiAssetSignal:
             tp_price=105.0,
             sl_price=98.0,
             quantity=10.0,
-            atr=2.0
+            atr=2.0,
         )
 
         assert signal.asset == "HYPE"
@@ -114,7 +113,7 @@ class TestCorrelationFilter:
             tp_price=105.0,
             sl_price=98.0,
             entry_time=datetime.now(),
-            leverage=5
+            leverage=5,
         )
         position.asset = "ETH"
 
@@ -157,7 +156,7 @@ class TestMultiAssetStrategy:
         strategy = MultiAssetStrategy(
             base_config=sample_config,
             assets=assets,
-            allocation_method=AssetAllocationMethod.EQUAL_WEIGHT
+            allocation_method=AssetAllocationMethod.EQUAL_WEIGHT,
         )
 
         assert len(strategy.assets) == 2
@@ -176,13 +175,13 @@ class TestMultiAssetStrategy:
         strategy = MultiAssetStrategy(
             base_config=sample_config,
             assets=assets,
-            allocation_method=AssetAllocationMethod.EQUAL_WEIGHT
+            allocation_method=AssetAllocationMethod.EQUAL_WEIGHT,
         )
 
         # Equal weight should give 1/3 to each
-        assert abs(strategy.allocations["HYPE"] - 1/3) < 0.01
-        assert abs(strategy.allocations["ETH"] - 1/3) < 0.01
-        assert abs(strategy.allocations["BTC"] - 1/3) < 0.01
+        assert abs(strategy.allocations["HYPE"] - 1 / 3) < 0.01
+        assert abs(strategy.allocations["ETH"] - 1 / 3) < 0.01
+        assert abs(strategy.allocations["BTC"] - 1 / 3) < 0.01
 
     def test_can_trade_asset_success(self, sample_config):
         """Test can_trade_asset when conditions are met"""
@@ -197,7 +196,7 @@ class TestMultiAssetStrategy:
             tp_price=105.0,
             sl_price=98.0,
             quantity=10.0,
-            atr=2.0
+            atr=2.0,
         )
 
         can_trade, reason = strategy.can_trade_asset("HYPE", signal, [])
@@ -218,7 +217,7 @@ class TestMultiAssetStrategy:
             tp_price=105.0,
             sl_price=98.0,
             quantity=10.0,
-            atr=2.0
+            atr=2.0,
         )
 
         # Add existing position
@@ -229,7 +228,7 @@ class TestMultiAssetStrategy:
             tp_price=105.0,
             sl_price=98.0,
             entry_time=datetime.now(),
-            leverage=5
+            leverage=5,
         )
         position.asset = "HYPE"
 
@@ -245,7 +244,7 @@ class TestMultiAssetStrategy:
         # Include both enabled and disabled assets
         assets = [
             AssetConfig(symbol="HYPE", weight=1.0, enabled=False),
-            AssetConfig(symbol="ETH", weight=1.0, enabled=True)
+            AssetConfig(symbol="ETH", weight=1.0, enabled=True),
         ]
         strategy = MultiAssetStrategy(sample_config, assets)
 
@@ -257,7 +256,7 @@ class TestMultiAssetStrategy:
             tp_price=105.0,
             sl_price=98.0,
             quantity=10.0,
-            atr=2.0
+            atr=2.0,
         )
 
         # HYPE should not be in strategy assets since it's disabled
@@ -283,7 +282,7 @@ class TestMultiAssetStrategy:
             tp_price=105.0,
             sl_price=98.0,
             quantity=10.0,
-            atr=2.0
+            atr=2.0,
         )
 
         quantity = strategy.calculate_position_size("HYPE", signal, 10000)
@@ -302,7 +301,7 @@ class TestMultiAssetStrategy:
             tp_price=105.0,
             sl_price=98.0,
             entry_time=datetime.now(),
-            leverage=5
+            leverage=5,
         )
 
         strategy.add_position("HYPE", position)
@@ -332,7 +331,7 @@ class TestMultiAssetStrategy:
                 tp_price=105.0,
                 sl_price=98.0,
                 entry_time=datetime.now(),
-                leverage=5
+                leverage=5,
             )
             strategy.add_position(asset, position)
 
@@ -371,10 +370,7 @@ class TestCreateDefaultMultiAssetConfig:
 
     def test_custom_weights(self):
         """Test custom weight config creation"""
-        assets = create_default_multi_asset_config(
-            ["HYPE", "ETH"],
-            equal_weights=False
-        )
+        assets = create_default_multi_asset_config(["HYPE", "ETH"], equal_weights=False)
 
         assert len(assets) == 2
         assert all(a.weight == 1.0 for a in assets)  # Default is still 1.0

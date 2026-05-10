@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
-from src.core.config import BotConfig, Side, Position, Trade, OrderStatus
+from src.core.config import BotConfig, Side, Position, Trade
 from src.core.strategy import StrategyEngine, RiskManager
 
 
@@ -40,7 +40,7 @@ def sample_candles():
     timestamps = pd.date_range(
         start=datetime.now() - timedelta(hours=n_candles),
         periods=n_candles,
-        freq="15min"
+        freq="15min",
     )
 
     # Generate random walk prices
@@ -55,14 +55,16 @@ def sample_candles():
         low_price = min(open_price, close_price) - abs(np.random.normal(0, 0.2))
         volume = abs(np.random.normal(10000, 2000))
 
-        candles.append({
-            "timestamp": ts,
-            "open": open_price,
-            "high": high_price,
-            "low": low_price,
-            "close": close_price,
-            "volume": volume
-        })
+        candles.append(
+            {
+                "timestamp": ts,
+                "open": open_price,
+                "high": high_price,
+                "low": low_price,
+                "close": close_price,
+                "volume": volume,
+            }
+        )
 
     return candles
 
@@ -77,7 +79,7 @@ def sample_position():
         tp_price=105.0,
         sl_price=98.0,
         entry_time=datetime.now(),
-        leverage=5
+        leverage=5,
     )
 
 
@@ -92,7 +94,7 @@ def sample_trade():
         entry_time=datetime.now() - timedelta(hours=1),
         exit_time=datetime.now(),
         pnl=50.0,
-        fees=2.0
+        fees=2.0,
     )
 
 
