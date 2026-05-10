@@ -45,7 +45,9 @@ def create_paper_config(capital: float = 10000):
 
     # Account (not needed for paper, but set dummy values)
     # Valid dummy key for eth_account
-    config.PRIVATE_KEY = "0x0000000000000000000000000000000000000000000000000000000000000001"
+    config.PRIVATE_KEY = (
+        "0x0000000000000000000000000000000000000000000000000000000000000001"
+    )
     config.ADDRESS = "0x0000000000000000000000000000000000000001"
 
     # Strategy - same as mainnet
@@ -118,8 +120,8 @@ async def run_paper_bot(capital: float = 10000):
     logger.info("=" * 60)
     logger.info("PAPER TRADING BOT STARTING")
     logger.info("=" * 60)
-    logger.info(f"Exchange: Mainnet (real market data)")
-    logger.info(f"Mode: Paper Trading (simulated orders)")
+    logger.info("Exchange: Mainnet (real market data)")
+    logger.info("Mode: Paper Trading (simulated orders)")
     logger.info(f"Starting Capital: ${capital:,.2f}")
     logger.info(f"Asset: {config.ASSET}")
     logger.info(f"Timeframe: {config.TIMEFRAME}")

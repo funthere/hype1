@@ -30,7 +30,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from dotenv import load_dotenv
 from rich.console import Console
-from rich.live import Live
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
@@ -41,8 +40,6 @@ from src.storage.database import DatabaseManager
 from src.strategy.funding_rate_arb import (
     FundingArbConfig,
     FundingRateArbStrategy,
-    PositionSide,
-    PositionStatus,
 )
 
 # ---------------------------------------------------------------------------
@@ -173,9 +170,7 @@ def build_config(args: argparse.Namespace) -> FundingArbConfig:
     # Live mode needs a valid key
     if not paper_mode:
         if not config.PRIVATE_KEY:
-            logger.error(
-                "Live mode requires PRIVATE_KEY in .env or environment"
-            )
+            logger.error("Live mode requires PRIVATE_KEY in .env or environment")
             sys.exit(1)
     else:
         # Dummy key for paper mode SDK init
@@ -199,7 +194,7 @@ def build_status_table(
 ) -> Table:
     """Build a Rich table summarising strategy state."""
     status = strategy.get_status()
-    summary = status["summary"]
+    status["summary"]
 
     # --- Main status table ---
     table = Table(
@@ -226,7 +221,11 @@ def build_status_table(
     for p in status["positions"]["open"]:
         shown_coins.add(p["coin"])
         rate_display = f"{p['entry_rate'] * 100:.4f}%"
-        pnl_display = f"+{p['funding_collected']:.6f}" if p["funding_collected"] >= 0 else f"{p['funding_collected']:.6f}"
+        pnl_display = (
+            f"+{p['funding_collected']:.6f}"
+            if p["funding_collected"] >= 0
+            else f"{p['funding_collected']:.6f}"
+        )
         table.add_row(
             p["coin"],
             rate_display,
@@ -277,39 +276,37 @@ def build_summary_panel(
 
     mode_label = "[yellow]PAPER[/yellow]" if config.PAPER_TRADING else "[red]LIVE[/red]"
     capital_str = (
-        f"${status['capital']:,.2f}"
-        if status["capital"] is not None
-        else "N/A (live)"
+        f"${status['capital']:,.2f}" if status["capital"] is not None else "N/A (live)"
     )
 
     text = Text()
-    text.append(f"  Mode: ", style="bold")
+    text.append("  Mode: ", style="bold")
     text.append(f"{mode_label}\n")
-    text.append(f"  Cycle: ")
+    text.append("  Cycle: ")
     text.append(f"{status['cycle']}\n")
-    text.append(f"  Capital: ")
+    text.append("  Capital: ")
     text.append(f"{capital_str}\n")
-    text.append(f"  Open Positions: ")
+    text.append("  Open Positions: ")
     text.append(f"{summary['open_count']}\n", style="bold yellow")
-    text.append(f"  Closed Positions: ")
+    text.append("  Closed Positions: ")
     text.append(f"{summary['closed_count']}\n")
-    text.append(f"  Total PnL: ")
+    text.append("  Total PnL: ")
     pnl_style = "green" if summary["total_pnl"] >= 0 else "red"
     text.append(f"${summary['total_pnl']:.4f}\n", style=pnl_style)
-    text.append(f"  Total Funding Collected: ")
+    text.append("  Total Funding Collected: ")
     text.append(f"${summary['total_funding_collected']:.6f}\n", style="green")
     if config.COINS:
-        text.append(f"  Coins: ")
+        text.append("  Coins: ")
         text.append(f"{', '.join(config.COINS)}\n")
     else:
-        text.append(f"  Coins: ALL\n")
-    text.append(f"  Entry Threshold: ")
+        text.append("  Coins: ALL\n")
+    text.append("  Entry Threshold: ")
     text.append(f"{config.ENTRY_THRESHOLD * 100:.4f}%\n")
-    text.append(f"  Exit Threshold: ")
+    text.append("  Exit Threshold: ")
     text.append(f"{config.EXIT_THRESHOLD * 100:.4f}%\n")
-    text.append(f"  Leverage: ")
+    text.append("  Leverage: ")
     text.append(f"{config.LEVERAGE}x\n")
-    text.append(f"  Scan Interval: ")
+    text.append("  Scan Interval: ")
     text.append(f"{config.CHECK_INTERVAL}s\n")
 
     return Panel(text, title="📊 Strategy Summary", border_style="cyan")

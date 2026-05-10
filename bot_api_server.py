@@ -9,8 +9,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Set, Any, Callable
-from dataclasses import asdict
+from typing import Dict, List, Optional, Set
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -23,6 +22,7 @@ logger = logging.getLogger(__name__)
 # Pydantic models for API requests/responses
 class BotStatusResponse(BaseModel):
     """Bot status response model"""
+
     is_running: bool
     is_paused: bool
     mode: str  # "paper", "testnet", "mainnet"
@@ -35,6 +35,7 @@ class BotStatusResponse(BaseModel):
 
 class PositionResponse(BaseModel):
     """Position response model"""
+
     side: str
     entry_price: float
     quantity: float
@@ -48,6 +49,7 @@ class PositionResponse(BaseModel):
 
 class TradeResponse(BaseModel):
     """Trade response model"""
+
     side: str
     entry_price: float
     exit_price: Optional[float]
@@ -60,6 +62,7 @@ class TradeResponse(BaseModel):
 
 class StatsResponse(BaseModel):
     """Statistics response model"""
+
     total_trades: int
     winning_trades: int
     losing_trades: int
@@ -75,6 +78,7 @@ class StatsResponse(BaseModel):
 
 class CircuitBreakerResponse(BaseModel):
     """Circuit breaker status response"""
+
     enabled: bool
     is_triggered: bool
     consecutive_losses: int
@@ -85,6 +89,7 @@ class CircuitBreakerResponse(BaseModel):
 
 class ConfigResponse(BaseModel):
     """Configuration response"""
+
     asset: str
     timeframe: str
     leverage: int
@@ -99,6 +104,7 @@ class ConfigResponse(BaseModel):
 
 class ControlActionRequest(BaseModel):
     """Control action request"""
+
     action: str  # "pause", "resume", "close_all", "reset_cb", "update_param"
     params: Optional[Dict] = None
 
@@ -138,7 +144,7 @@ class TradingBotAPI:
             return {
                 "name": "HYPE Trading Bot API",
                 "version": "1.0.0",
-                "status": "running"
+                "status": "running",
             }
 
         @self.app.get("/api/status", response_model=BotStatusResponse)
@@ -151,14 +157,16 @@ class TradingBotAPI:
             return BotStatusResponse(
                 is_running=self.bot.is_running,
                 is_paused=self.bot.is_paused,
-                mode="paper" if self.bot.config.PAPER_TRADING else (
-                    "testnet" if self.bot.config.USE_TESTNET else "mainnet"
-                ),
+                mode="paper"
+                if self.bot.config.PAPER_TRADING
+                else ("testnet" if self.bot.config.USE_TESTNET else "mainnet"),
                 asset=self.bot.config.ASSET,
                 timeframe=self.bot.config.TIMEFRAME,
                 leverage=self.bot.config.LEVERAGE,
-                start_time=self.bot.start_time.isoformat() if self.bot.start_time else None,
-                uptime_seconds=uptime
+                start_time=self.bot.start_time.isoformat()
+                if self.bot.start_time
+                else None,
+                uptime_seconds=uptime,
             )
 
         @self.app.get("/api/positions", response_model=List[PositionResponse])
@@ -166,17 +174,19 @@ class TradingBotAPI:
             """Get open positions"""
             positions = []
             for pos in self.bot.positions:
-                positions.append(PositionResponse(
-                    side=pos.side.value,
-                    entry_price=pos.entry_price,
-                    quantity=pos.quantity,
-                    tp_price=pos.tp_price,
-                    sl_price=pos.sl_price,
-                    entry_time=pos.entry_time.isoformat(),
-                    leverage=pos.leverage,
-                    unrealized_pnl=pos.unrealized_pnl,
-                    status=pos.status.value
-                ))
+                positions.append(
+                    PositionResponse(
+                        side=pos.side.value,
+                        entry_price=pos.entry_price,
+                        quantity=pos.quantity,
+                        tp_price=pos.tp_price,
+                        sl_price=pos.sl_price,
+                        entry_time=pos.entry_time.isoformat(),
+                        leverage=pos.leverage,
+                        unrealized_pnl=pos.unrealized_pnl,
+                        status=pos.status.value,
+                    )
+                )
             return positions
 
         @self.app.get("/api/trades", response_model=List[TradeResponse])
@@ -184,16 +194,20 @@ class TradingBotAPI:
             """Get trade history"""
             trades = []
             for trade in self.bot.trades[-limit:]:
-                trades.append(TradeResponse(
-                    side=trade.side.value,
-                    entry_price=trade.entry_price,
-                    exit_price=trade.exit_price,
-                    quantity=trade.quantity,
-                    entry_time=trade.entry_time.isoformat(),
-                    exit_time=trade.exit_time.isoformat() if trade.exit_time else None,
-                    pnl=trade.pnl,
-                    fees=trade.fees
-                ))
+                trades.append(
+                    TradeResponse(
+                        side=trade.side.value,
+                        entry_price=trade.entry_price,
+                        exit_price=trade.exit_price,
+                        quantity=trade.quantity,
+                        entry_time=trade.entry_time.isoformat(),
+                        exit_time=trade.exit_time.isoformat()
+                        if trade.exit_time
+                        else None,
+                        pnl=trade.pnl,
+                        fees=trade.fees,
+                    )
+                )
             return trades
 
         @self.app.get("/api/stats", response_model=StatsResponse)
@@ -201,11 +215,22 @@ class TradingBotAPI:
             """Get trading statistics"""
             winning_trades = [t for t in self.bot.trades if t.pnl > 0]
             losing_trades = [t for t in self.bot.trades if t.pnl < 0]
-            win_rate = (len(winning_trades) / len(self.bot.trades) * 100) if self.bot.trades else 0
+            win_rate = (
+                (len(winning_trades) / len(self.bot.trades) * 100)
+                if self.bot.trades
+                else 0
+            )
             total_pnl = sum(t.pnl for t in self.bot.trades)
             total_fees = sum(t.fees for t in self.bot.trades)
-            total_return_pct = ((self.bot.current_capital - self.bot.starting_capital) /
-                              self.bot.starting_capital * 100) if self.bot.starting_capital > 0 else 0
+            total_return_pct = (
+                (
+                    (self.bot.current_capital - self.bot.starting_capital)
+                    / self.bot.starting_capital
+                    * 100
+                )
+                if self.bot.starting_capital > 0
+                else 0
+            )
 
             return StatsResponse(
                 total_trades=len(self.bot.trades),
@@ -217,8 +242,10 @@ class TradingBotAPI:
                 starting_capital=round(self.bot.starting_capital, 2),
                 current_capital=round(self.bot.current_capital, 2),
                 total_return_pct=round(total_return_pct, 2),
-                max_drawdown_pct=round(self.bot.max_drawdown_pct, 2) if hasattr(self.bot, 'max_drawdown_pct') else 0,
-                daily_trades=self.bot.daily_trade_count
+                max_drawdown_pct=round(self.bot.max_drawdown_pct, 2)
+                if hasattr(self.bot, "max_drawdown_pct")
+                else 0,
+                daily_trades=self.bot.daily_trade_count,
             )
 
         @self.app.get("/api/circuit-breaker", response_model=CircuitBreakerResponse)
@@ -234,7 +261,7 @@ class TradingBotAPI:
                 consecutive_losses=self.bot.consecutive_losses,
                 max_consecutive_losses=self.bot.config.MAX_CONSECUTIVE_LOSSES,
                 cooldown_until=cooldown_until,
-                cooldown_minutes=self.bot.config.CIRCUIT_BREAKER_COOLDOWN_MINUTES
+                cooldown_minutes=self.bot.config.CIRCUIT_BREAKER_COOLDOWN_MINUTES,
             )
 
         @self.app.get("/api/config", response_model=ConfigResponse)
@@ -250,7 +277,7 @@ class TradingBotAPI:
                 max_positions=self.bot.config.MAX_POSITIONS,
                 max_daily_trades=self.bot.config.MAX_DAILY_TRADES,
                 max_daily_loss_pct=self.bot.config.MAX_DAILY_LOSS_PCT,
-                confidence_threshold=self.bot.config.CONFIDENCE_THRESHOLD
+                confidence_threshold=self.bot.config.CONFIDENCE_THRESHOLD,
             )
 
         @self.app.post("/api/control")
@@ -272,8 +299,13 @@ class TradingBotAPI:
 
                 elif action == "close_all":
                     closed = await self.bot.close_all_positions()
-                    await self._broadcast_update({"type": "positions_closed", "count": closed})
-                    return {"status": "success", "message": f"Closed {closed} positions"}
+                    await self._broadcast_update(
+                        {"type": "positions_closed", "count": closed}
+                    )
+                    return {
+                        "status": "success",
+                        "message": f"Closed {closed} positions",
+                    }
 
                 elif action == "reset_cb":
                     self.bot.reset_circuit_breaker()
@@ -285,29 +317,36 @@ class TradingBotAPI:
                     param_value = params.get("value")
                     if param_name and param_value is not None:
                         self.bot.update_config_param(param_name, param_value)
-                        await self._broadcast_update({
-                            "type": "config_updated",
-                            "param": param_name,
-                            "value": param_value
-                        })
+                        await self._broadcast_update(
+                            {
+                                "type": "config_updated",
+                                "param": param_name,
+                                "value": param_value,
+                            }
+                        )
                         return {"status": "success", "message": f"Updated {param_name}"}
                     else:
                         return JSONResponse(
                             status_code=400,
-                            content={"status": "error", "message": "Missing name or value"}
+                            content={
+                                "status": "error",
+                                "message": "Missing name or value",
+                            },
                         )
 
                 else:
                     return JSONResponse(
                         status_code=400,
-                        content={"status": "error", "message": f"Unknown action: {action}"}
+                        content={
+                            "status": "error",
+                            "message": f"Unknown action: {action}",
+                        },
                     )
 
             except Exception as e:
                 logger.error(f"Control action error: {e}")
                 return JSONResponse(
-                    status_code=500,
-                    content={"status": "error", "message": str(e)}
+                    status_code=500, content={"status": "error", "message": str(e)}
                 )
 
         @self.app.post("/api/manual-trade")
@@ -321,25 +360,26 @@ class TradingBotAPI:
                 if not quantity:
                     return JSONResponse(
                         status_code=400,
-                        content={"status": "error", "message": "Missing quantity"}
+                        content={"status": "error", "message": "Missing quantity"},
                     )
 
                 side = self.bot.Side.LONG if side_str == "LONG" else self.bot.Side.SHORT
 
                 result = await self.bot.place_manual_trade(side, quantity, price)
-                await self._broadcast_update({
-                    "type": "manual_trade_placed",
-                    "side": side_str,
-                    "quantity": quantity
-                })
+                await self._broadcast_update(
+                    {
+                        "type": "manual_trade_placed",
+                        "side": side_str,
+                        "quantity": quantity,
+                    }
+                )
 
                 return {"status": "success", "data": result}
 
             except Exception as e:
                 logger.error(f"Manual trade error: {e}")
                 return JSONResponse(
-                    status_code=500,
-                    content={"status": "error", "message": str(e)}
+                    status_code=500, content={"status": "error", "message": str(e)}
                 )
 
         @self.app.websocket("/ws")
@@ -350,10 +390,9 @@ class TradingBotAPI:
 
             try:
                 # Send initial state
-                await websocket.send_json({
-                    "type": "connected",
-                    "message": "Connected to HYPE Trading Bot"
-                })
+                await websocket.send_json(
+                    {"type": "connected", "message": "Connected to HYPE Trading Bot"}
+                )
 
                 # Keep connection alive and handle client messages
                 while True:
@@ -371,7 +410,7 @@ class TradingBotAPI:
         if not self.websocket_clients:
             return
 
-        message = json.dumps(data)
+        json.dumps(data)
         disconnected = set()
 
         for client in self.websocket_clients:
@@ -385,28 +424,34 @@ class TradingBotAPI:
 
     async def broadcast_trade_update(self, trade_type: str, data: Dict):
         """Broadcast trade-related updates"""
-        await self._broadcast_update({
-            "type": "trade_update",
-            "trade_type": trade_type,
-            "data": data,
-            "timestamp": datetime.now().isoformat()
-        })
+        await self._broadcast_update(
+            {
+                "type": "trade_update",
+                "trade_type": trade_type,
+                "data": data,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
 
     async def broadcast_position_update(self, data: Dict):
         """Broadcast position updates"""
-        await self._broadcast_update({
-            "type": "position_update",
-            "data": data,
-            "timestamp": datetime.now().isoformat()
-        })
+        await self._broadcast_update(
+            {
+                "type": "position_update",
+                "data": data,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
 
     async def broadcast_stats_update(self, data: Dict):
         """Broadcast statistics updates"""
-        await self._broadcast_update({
-            "type": "stats_update",
-            "data": data,
-            "timestamp": datetime.now().isoformat()
-        })
+        await self._broadcast_update(
+            {
+                "type": "stats_update",
+                "data": data,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
 
     async def start(self):
         """Start the API server"""
@@ -414,7 +459,7 @@ class TradingBotAPI:
             self.app,
             host=self.host,
             port=self.port,
-            log_level="warning"  # Reduce noise from uvicorn
+            log_level="warning",  # Reduce noise from uvicorn
         )
         self.server = uvicorn.Server(config)
 

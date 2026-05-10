@@ -7,9 +7,9 @@ import logging
 import os
 import signal
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 
-from ..core.config import BotConfig, Side, OrderStatus, Position, Trade
+from ..core.config import BotConfig, Side, Position, Trade
 from ..core.strategy import StrategyEngine, RiskManager
 from ..core.survival_risk import SurvivalRiskManager
 from ..exchange.connector import HyperliquidAPI
@@ -62,7 +62,9 @@ class TradingBot:
 
         # Statistics
         self.start_time: Optional[datetime] = None
-        self.starting_capital = config.PAPER_CAPITAL if config.PAPER_TRADING else 10000.0
+        self.starting_capital = (
+            config.PAPER_CAPITAL if config.PAPER_TRADING else 10000.0
+        )
         self.current_capital = self.starting_capital
         self.peak_equity = self.starting_capital
         self.max_drawdown_pct = 0.0
@@ -76,7 +78,7 @@ class TradingBot:
         self.adaptive_params = AdaptiveParameterManager(config)
         self.health_monitor = HealthMonitor()
         self.performance_analyzer = PerformanceAnalyzer(self.starting_capital)
-        
+
         # Cached market data
         self._cached_mids: Dict[str, float] = {}
         self._mids_last_update: Optional[datetime] = None
@@ -186,7 +188,9 @@ class TradingBot:
 
         # Get initial price
         mids = await self.api.get_mids()
-        logger.info(f"Current {self.config.ASSET} mid: ${mids.get(self.config.ASSET, 'N/A')}")
+        logger.info(
+            f"Current {self.config.ASSET} mid: ${mids.get(self.config.ASSET, 'N/A')}"
+        )
 
         # Start market data feed
         asyncio.create_task(self.market_data.connect())
@@ -240,7 +244,7 @@ class TradingBot:
         """Handle candle update from WebSocket"""
         self.strategy.update_candle(candle)
         # Update adaptive parameters with new price
-        current_price = float(candle.get('close', 0))
+        current_price = float(candle.get("close", 0))
         if current_price > 0:
             self.adaptive_params.update_market_data(current_price)
             self._cached_mids[self.config.ASSET] = current_price
@@ -292,13 +296,15 @@ class TradingBot:
                     entry_time=datetime.now(),
                     leverage=self.config.LEVERAGE,
                 )
-                can_open_survival, survival_reason = self.survival_risk.can_open_position(
-                    position=test_position,
-                    existing_positions=self.positions,
-                    capital=self.current_capital,
-                    current_price=current_price,
-                    daily_pnl=self.daily_pnl,
-                    consecutive_losses=self.consecutive_losses,
+                can_open_survival, survival_reason = (
+                    self.survival_risk.can_open_position(
+                        position=test_position,
+                        existing_positions=self.positions,
+                        capital=self.current_capital,
+                        current_price=current_price,
+                        daily_pnl=self.daily_pnl,
+                        consecutive_losses=self.consecutive_losses,
+                    )
                 )
                 if not can_open_survival:
                     logger.info(f"Survival risk blocked: {survival_reason}")
@@ -358,9 +364,11 @@ class TradingBot:
             return
 
         # Use cached mids from WebSocket if recent (< 30s), otherwise fetch
-        if (self._mids_last_update and 
-            (datetime.now() - self._mids_last_update).total_seconds() < 30 and
-            self.config.ASSET in self._cached_mids):
+        if (
+            self._mids_last_update
+            and (datetime.now() - self._mids_last_update).total_seconds() < 30
+            and self.config.ASSET in self._cached_mids
+        ):
             current_price = self._cached_mids[self.config.ASSET]
         else:
             mids = await self.api.get_mids()
@@ -400,7 +408,9 @@ class TradingBot:
 
     async def _close_position(self, position: Position, exit_price: float, reason: str):
         """Close a position"""
-        logger.info(f"Closing {position.side.value} position @ ${exit_price:.4f} ({reason})")
+        logger.info(
+            f"Closing {position.side.value} position @ ${exit_price:.4f} ({reason})"
+        )
 
         # Calculate P&L
         if position.side == Side.LONG:
@@ -432,7 +442,9 @@ class TradingBot:
 
         # Save trade to database
         self.db.save_trade(trade)
-        self.db.log_event("trade_exit", f"{position.side.value} exit ({reason})", {"pnl": net_pnl})
+        self.db.log_event(
+            "trade_exit", f"{position.side.value} exit ({reason})", {"pnl": net_pnl}
+        )
 
         # Update tracking
         self.trades.append(trade)
@@ -442,9 +454,13 @@ class TradingBot:
         self.current_capital += net_pnl
 
         # Update survival risk manager
-        self.survival_risk.update_after_trade(trade, self.current_capital, datetime.now())
-        self.survival_risk.tiered_risk.update(trade, self.daily_pnl, self.consecutive_losses)
-        
+        self.survival_risk.update_after_trade(
+            trade, self.current_capital, datetime.now()
+        )
+        self.survival_risk.tiered_risk.update(
+            trade, self.daily_pnl, self.consecutive_losses
+        )
+
         # Record trade for adaptive parameters and performance analysis
         self.adaptive_params.record_trade(trade)
         self.performance_analyzer.add_trade(trade)
@@ -536,7 +552,9 @@ class TradingBot:
             self.consecutive_losses = 0
 
             if self.telegram:
-                await self.telegram.notify_circuit_breaker(False, 0, self.config.MAX_CONSECUTIVE_LOSSES)
+                await self.telegram.notify_circuit_breaker(
+                    False, 0, self.config.MAX_CONSECUTIVE_LOSSES
+                )
 
     async def _trigger_circuit_breaker(self):
         """Trigger circuit breaker after consecutive losses"""
@@ -547,7 +565,9 @@ class TradingBot:
         logger.warning("=" * 60)
         logger.warning("⛔ CIRCUIT BREAKER TRIGGERED!")
         logger.warning(f"   Consecutive losses: {self.consecutive_losses}")
-        logger.warning(f"   Cooldown: {self.config.CIRCUIT_BREAKER_COOLDOWN_MINUTES} minutes")
+        logger.warning(
+            f"   Cooldown: {self.config.CIRCUIT_BREAKER_COOLDOWN_MINUTES} minutes"
+        )
         logger.warning("=" * 60)
 
         if self.telegram:
@@ -564,9 +584,11 @@ class TradingBot:
             return
 
         # Use cached mids from WebSocket if recent (< 30s), otherwise fetch
-        if (self._mids_last_update and 
-            (datetime.now() - self._mids_last_update).total_seconds() < 30 and
-            self.config.ASSET in self._cached_mids):
+        if (
+            self._mids_last_update
+            and (datetime.now() - self._mids_last_update).total_seconds() < 30
+            and self.config.ASSET in self._cached_mids
+        ):
             current_price = self._cached_mids[self.config.ASSET]
         else:
             mids = await self.api.get_mids()
@@ -595,9 +617,11 @@ class TradingBot:
         logger.warning(f"[{reason}] Closing {len(self.positions)} position(s)...")
 
         # Use cached mids from WebSocket if recent (< 30s), otherwise fetch
-        if (self._mids_last_update and 
-            (datetime.now() - self._mids_last_update).total_seconds() < 30 and
-            self.config.ASSET in self._cached_mids):
+        if (
+            self._mids_last_update
+            and (datetime.now() - self._mids_last_update).total_seconds() < 30
+            and self.config.ASSET in self._cached_mids
+        ):
             current_price = self._cached_mids[self.config.ASSET]
         else:
             mids = await self.api.get_mids()
@@ -609,7 +633,9 @@ class TradingBot:
             await self._close_position(position, current_price, reason)
 
         closed_count = len(positions_to_close)
-        logger.info(f"[{reason}] Closed {closed_count} position(s). P&L: ${self.daily_pnl:.2f}")
+        logger.info(
+            f"[{reason}] Closed {closed_count} position(s). P&L: ${self.daily_pnl:.2f}"
+        )
 
         return closed_count
 
@@ -644,7 +670,11 @@ class TradingBot:
 
     def _log_bot_info(self):
         """Log bot configuration info"""
-        mode = "PAPER" if self.config.PAPER_TRADING else ("TESTNET" if self.config.USE_TESTNET else "MAINNET")
+        mode = (
+            "PAPER"
+            if self.config.PAPER_TRADING
+            else ("TESTNET" if self.config.USE_TESTNET else "MAINNET")
+        )
 
         logger.info(f"Strategy: Ultra-Optimized Momentum ({self.config.TIMEFRAME})")
         logger.info(f"Asset: {self.config.ASSET}")
@@ -653,7 +683,9 @@ class TradingBot:
         logger.info(f"Mode: {mode}")
 
         if self.config.CIRCUIT_BREAKER_ENABLED:
-            logger.info(f"Circuit Breaker: {self.config.MAX_CONSECUTIVE_LOSSES} losses -> {self.config.CIRCUIT_BREAKER_COOLDOWN_MINUTES}min cooldown")
+            logger.info(
+                f"Circuit Breaker: {self.config.MAX_CONSECUTIVE_LOSSES} losses -> {self.config.CIRCUIT_BREAKER_COOLDOWN_MINUTES}min cooldown"
+            )
 
     def print_statistics(self) -> None:
         """Print trading statistics summary"""
@@ -663,12 +695,23 @@ class TradingBot:
         win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
         total_pnl = sum(t.pnl for t in self.trades)
         total_fees = sum(t.fees for t in self.trades)
-        pnl_pct = ((self.current_capital - self.starting_capital) / self.starting_capital * 100
-                    if self.starting_capital > 0 else 0)
+        pnl_pct = (
+            (self.current_capital - self.starting_capital) / self.starting_capital * 100
+            if self.starting_capital > 0
+            else 0
+        )
 
         # Calculate average win/loss
-        avg_win = (sum(t.pnl for t in self.trades if t.pnl > 0) / winning_trades) if winning_trades > 0 else 0
-        avg_loss = (sum(t.pnl for t in self.trades if t.pnl < 0) / losing_trades) if losing_trades > 0 else 0
+        avg_win = (
+            (sum(t.pnl for t in self.trades if t.pnl > 0) / winning_trades)
+            if winning_trades > 0
+            else 0
+        )
+        avg_loss = (
+            (sum(t.pnl for t in self.trades if t.pnl < 0) / losing_trades)
+            if losing_trades > 0
+            else 0
+        )
 
         # Best/worst trade
         best_trade = max((t.pnl for t in self.trades), default=0)
@@ -703,7 +746,9 @@ class TradingBot:
         print(f"Max Drawdown:         {self.max_drawdown_pct:.2%}")
         print(f"Open Positions:       {len(self.positions)}")
         print(f"Consecutive Losses:   {self.consecutive_losses}")
-        print(f"Circuit Breaker:      {'ACTIVE' if self.circuit_breaker_triggered else 'Off'}")
+        print(
+            f"Circuit Breaker:      {'ACTIVE' if self.circuit_breaker_triggered else 'Off'}"
+        )
 
         # Performance analytics (Phase 2)
         if self.trades:
@@ -720,7 +765,7 @@ class TradingBot:
                 print(f"Max Losing Streak:     {metrics.max_losing_streak}")
             except Exception:
                 pass
-        
+
         # Adaptive parameters
         try:
             params = self.adaptive_params.get_parameters()
@@ -746,7 +791,9 @@ class TradingBot:
             )
             self.api_server.start_in_background()
 
-            logger.info(f"✅ API server on http://{self.config.WEB_UI_HOST}:{self.config.WEB_UI_PORT}")
+            logger.info(
+                f"✅ API server on http://{self.config.WEB_UI_HOST}:{self.config.WEB_UI_PORT}"
+            )
         except ImportError:
             logger.warning("Could not import API server - bot_api_server.py not found")
 
@@ -796,6 +843,8 @@ class TradingBot:
             "is_triggered": self.circuit_breaker_triggered,
             "consecutive_losses": self.consecutive_losses,
             "max_consecutive_losses": self.config.MAX_CONSECUTIVE_LOSSES,
-            "cooldown_until": self.circuit_breaker_until.isoformat() if self.circuit_breaker_until else None,
+            "cooldown_until": self.circuit_breaker_until.isoformat()
+            if self.circuit_breaker_until
+            else None,
             "cooldown_minutes": self.config.CIRCUIT_BREAKER_COOLDOWN_MINUTES,
         }

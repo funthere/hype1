@@ -2,7 +2,7 @@
 Configuration and data models for the trading bot
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Optional
@@ -12,12 +12,14 @@ from hyperliquid.utils import constants
 
 class Side(Enum):
     """Trade side"""
+
     LONG = "LONG"
     SHORT = "SHORT"
 
 
 class OrderStatus(Enum):
     """Order status"""
+
     PENDING = "pending"
     OPEN = "open"
     FILLED = "filled"
@@ -29,6 +31,7 @@ class OrderStatus(Enum):
 @dataclass
 class Position:
     """Open position tracking"""
+
     side: Side
     entry_price: float
     quantity: float
@@ -45,6 +48,7 @@ class Position:
 @dataclass
 class Trade:
     """Completed trade tracking"""
+
     side: Side
     entry_price: float
     exit_price: float
@@ -155,11 +159,11 @@ class BotConfig:
         for key, value in os.environ.items():
             if hasattr(config, key):
                 attr_type = type(getattr(config, key))
-                if attr_type == bool:
+                if attr_type is bool:
                     setattr(config, key, value.lower() in ("true", "1", "yes"))
-                elif attr_type == int:
+                elif attr_type is int:
                     setattr(config, key, int(value))
-                elif attr_type == float:
+                elif attr_type is float:
                     setattr(config, key, float(value))
                 else:
                     setattr(config, key, str(value))

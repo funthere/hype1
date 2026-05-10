@@ -13,18 +13,29 @@ from src.bot.trading_bot import TradingBot
 @pytest.fixture
 def mock_all():
     """Mock all external dependencies"""
-    with patch('src.bot.trading_bot.HyperliquidAPI') as mock_api:
-        with patch('src.bot.trading_bot.MarketDataFeed') as mock_md:
-            with patch('src.bot.trading_bot.StrategyEngine') as mock_strat:
-                with patch('src.bot.trading_bot.RiskManager') as mock_rm:
-                    with patch('src.bot.trading_bot.DatabaseManager') as mock_db:
-                        with patch('src.bot.trading_bot.TelegramNotifier') as mock_tg:
+    with patch("src.bot.trading_bot.HyperliquidAPI") as mock_api:
+        with patch("src.bot.trading_bot.MarketDataFeed") as mock_md:
+            with patch("src.bot.trading_bot.StrategyEngine") as mock_strat:
+                with patch("src.bot.trading_bot.RiskManager") as mock_rm:
+                    with patch("src.bot.trading_bot.DatabaseManager") as mock_db:
+                        with patch("src.bot.trading_bot.TelegramNotifier") as mock_tg:
                             api_instance = Mock()
                             api_instance.check_connection = AsyncMock(return_value=True)
-                            api_instance.get_mids = AsyncMock(return_value={"HYPE": 100.0})
-                            api_instance.place_order = AsyncMock(return_value={"status": "ok", "response": {"oid": 12345}})
-                            api_instance.cancel_order = AsyncMock(return_value={"status": "ok"})
-                            api_instance.cancel_all_orders = AsyncMock(return_value={"status": "ok"})
+                            api_instance.get_mids = AsyncMock(
+                                return_value={"HYPE": 100.0}
+                            )
+                            api_instance.place_order = AsyncMock(
+                                return_value={
+                                    "status": "ok",
+                                    "response": {"oid": 12345},
+                                }
+                            )
+                            api_instance.cancel_order = AsyncMock(
+                                return_value={"status": "ok"}
+                            )
+                            api_instance.cancel_all_orders = AsyncMock(
+                                return_value={"status": "ok"}
+                            )
                             mock_api.return_value = api_instance
 
                             md_instance = Mock()
@@ -37,7 +48,9 @@ def mock_all():
                             mock_strat.return_value = strat_instance
 
                             rm_instance = Mock()
-                            rm_instance.can_open_position = Mock(return_value=(True, ""))
+                            rm_instance.can_open_position = Mock(
+                                return_value=(True, "")
+                            )
                             mock_rm.return_value = rm_instance
 
                             db_instance = Mock()
@@ -145,7 +158,7 @@ class TestTradingBotInit:
         assert bot.current_capital == 50000
 
     def test_signal_handlers_setup(self, mock_all):
-        with patch('src.bot.trading_bot.signal.signal') as mock_signal:
+        with patch("src.bot.trading_bot.signal.signal") as mock_signal:
             config = BotConfig()
             config.PAPER_TRADING = True
             TradingBot(config)
@@ -194,21 +207,23 @@ class TestTradingBotProcessSignal:
     async def test_signal_cooldown_skip(self, mock_all, sample_signal):
         bot = create_bot(mocks=mock_all)
         bot._last_signal_time = datetime.now()
-        with patch.object(bot, '_place_entry_order') as mock_entry:
+        with patch.object(bot, "_place_entry_order") as mock_entry:
             await bot._process_signal(sample_signal)
             mock_entry.assert_not_called()
 
     async def test_signal_cooldown_expired(self, mock_all, sample_signal):
         bot = create_bot(mocks=mock_all)
         bot._last_signal_time = datetime.now() - timedelta(seconds=1000)
-        with patch.object(bot, '_place_entry_order') as mock_entry:
+        with patch.object(bot, "_place_entry_order") as mock_entry:
             await bot._process_signal(sample_signal)
             mock_entry.assert_called_once_with(sample_signal)
 
     async def test_signal_risk_manager_blocks(self, mock_all, sample_signal):
         bot = create_bot(mocks=mock_all)
-        bot.risk_manager.can_open_position = Mock(return_value=(False, "Max positions reached"))
-        with patch.object(bot, '_place_entry_order') as mock_entry:
+        bot.risk_manager.can_open_position = Mock(
+            return_value=(False, "Max positions reached")
+        )
+        with patch.object(bot, "_place_entry_order") as mock_entry:
             await bot._process_signal(sample_signal)
             mock_entry.assert_not_called()
 
@@ -224,14 +239,14 @@ class TestTradingBotProcessSignal:
             "quantity": 10.0,
             "atr": 2.5,
         }
-        with patch.object(bot, '_place_entry_order') as mock_entry:
+        with patch.object(bot, "_place_entry_order") as mock_entry:
             await bot._process_signal(signal)
             mock_entry.assert_not_called()
 
     async def test_signal_confidence_ok(self, mock_all, sample_signal):
         bot = create_bot(mocks=mock_all)
         bot._last_signal_time = datetime.now() - timedelta(seconds=1000)
-        with patch.object(bot, '_place_entry_order') as mock_entry:
+        with patch.object(bot, "_place_entry_order") as mock_entry:
             await bot._process_signal(sample_signal)
             mock_entry.assert_called_once()
 
@@ -239,7 +254,7 @@ class TestTradingBotProcessSignal:
         bot = create_bot(mocks=mock_all)
         bot._last_signal_time = datetime.now() - timedelta(seconds=1000)
         bot._last_signal_time = None
-        with patch.object(bot, '_place_entry_order'):
+        with patch.object(bot, "_place_entry_order"):
             await bot._process_signal(sample_signal)
             assert bot._last_signal_time is not None
 
@@ -275,7 +290,9 @@ class TestTradingBotPlaceEntry:
     async def test_place_entry_live_failure(self, mock_all, sample_signal):
         bot = create_bot(mocks=mock_all)
         bot.config.PAPER_TRADING = False
-        bot.api.place_order = AsyncMock(return_value={"status": "error", "msg": "Insufficient margin"})
+        bot.api.place_order = AsyncMock(
+            return_value={"status": "error", "msg": "Insufficient margin"}
+        )
         initial_count = len(bot.positions)
         await bot._place_entry_order(sample_signal)
         assert len(bot.positions) == initial_count
@@ -311,12 +328,16 @@ class TestTradingBotCheckExits:
         bot.api.get_mids = AsyncMock(return_value={"HYPE": 107.0})
         bot.positions = [
             Position(
-                side=Side.LONG, entry_price=100.0, quantity=10.0,
-                tp_price=105.0, sl_price=98.0,
-                entry_time=datetime.now(), leverage=5,
+                side=Side.LONG,
+                entry_price=100.0,
+                quantity=10.0,
+                tp_price=105.0,
+                sl_price=98.0,
+                entry_time=datetime.now(),
+                leverage=5,
             )
         ]
-        with patch.object(bot, '_close_position') as mock_close:
+        with patch.object(bot, "_close_position") as mock_close:
             await bot._check_position_exits()
             mock_close.assert_called_once()
 
@@ -325,12 +346,16 @@ class TestTradingBotCheckExits:
         bot.api.get_mids = AsyncMock(return_value={"HYPE": 97.0})
         bot.positions = [
             Position(
-                side=Side.LONG, entry_price=100.0, quantity=10.0,
-                tp_price=105.0, sl_price=98.0,
-                entry_time=datetime.now(), leverage=5,
+                side=Side.LONG,
+                entry_price=100.0,
+                quantity=10.0,
+                tp_price=105.0,
+                sl_price=98.0,
+                entry_time=datetime.now(),
+                leverage=5,
             )
         ]
-        with patch.object(bot, '_close_position') as mock_close:
+        with patch.object(bot, "_close_position") as mock_close:
             await bot._check_position_exits()
             mock_close.assert_called_once()
 
@@ -339,12 +364,16 @@ class TestTradingBotCheckExits:
         bot.api.get_mids = AsyncMock(return_value={"HYPE": 93.0})
         bot.positions = [
             Position(
-                side=Side.SHORT, entry_price=100.0, quantity=10.0,
-                tp_price=95.0, sl_price=102.0,
-                entry_time=datetime.now(), leverage=5,
+                side=Side.SHORT,
+                entry_price=100.0,
+                quantity=10.0,
+                tp_price=95.0,
+                sl_price=102.0,
+                entry_time=datetime.now(),
+                leverage=5,
             )
         ]
-        with patch.object(bot, '_close_position') as mock_close:
+        with patch.object(bot, "_close_position") as mock_close:
             await bot._check_position_exits()
             mock_close.assert_called_once()
 
@@ -353,12 +382,16 @@ class TestTradingBotCheckExits:
         bot.api.get_mids = AsyncMock(return_value={"HYPE": 103.0})
         bot.positions = [
             Position(
-                side=Side.SHORT, entry_price=100.0, quantity=10.0,
-                tp_price=95.0, sl_price=102.0,
-                entry_time=datetime.now(), leverage=5,
+                side=Side.SHORT,
+                entry_price=100.0,
+                quantity=10.0,
+                tp_price=95.0,
+                sl_price=102.0,
+                entry_time=datetime.now(),
+                leverage=5,
             )
         ]
-        with patch.object(bot, '_close_position') as mock_close:
+        with patch.object(bot, "_close_position") as mock_close:
             await bot._check_position_exits()
             mock_close.assert_called_once()
 
@@ -367,12 +400,16 @@ class TestTradingBotCheckExits:
         bot.api.get_mids = AsyncMock(return_value={"HYPE": 102.0})
         bot.positions = [
             Position(
-                side=Side.LONG, entry_price=100.0, quantity=10.0,
-                tp_price=105.0, sl_price=98.0,
-                entry_time=datetime.now(), leverage=5,
+                side=Side.LONG,
+                entry_price=100.0,
+                quantity=10.0,
+                tp_price=105.0,
+                sl_price=98.0,
+                entry_time=datetime.now(),
+                leverage=5,
             )
         ]
-        with patch.object(bot, '_close_position') as mock_close:
+        with patch.object(bot, "_close_position") as mock_close:
             await bot._check_position_exits()
             mock_close.assert_not_called()
 
@@ -380,14 +417,26 @@ class TestTradingBotCheckExits:
         bot = create_bot(mocks=mock_all)
         bot.api.get_mids = AsyncMock(return_value={"HYPE": 107.0})
         bot.positions = [
-            Position(side=Side.LONG, entry_price=100.0, quantity=10.0,
-                     tp_price=105.0, sl_price=98.0,
-                     entry_time=datetime.now(), leverage=5),
-            Position(side=Side.LONG, entry_price=100.0, quantity=10.0,
-                     tp_price=110.0, sl_price=98.0,
-                     entry_time=datetime.now(), leverage=5),
+            Position(
+                side=Side.LONG,
+                entry_price=100.0,
+                quantity=10.0,
+                tp_price=105.0,
+                sl_price=98.0,
+                entry_time=datetime.now(),
+                leverage=5,
+            ),
+            Position(
+                side=Side.LONG,
+                entry_price=100.0,
+                quantity=10.0,
+                tp_price=110.0,
+                sl_price=98.0,
+                entry_time=datetime.now(),
+                leverage=5,
+            ),
         ]
-        with patch.object(bot, '_close_position') as mock_close:
+        with patch.object(bot, "_close_position") as mock_close:
             await bot._check_position_exits()
             assert mock_close.call_count == 1
 
@@ -395,11 +444,17 @@ class TestTradingBotCheckExits:
         bot = create_bot(mocks=mock_all)
         bot.api.get_mids = AsyncMock(return_value={"HYPE": 0.0})
         bot.positions = [
-            Position(side=Side.LONG, entry_price=100.0, quantity=10.0,
-                     tp_price=105.0, sl_price=98.0,
-                     entry_time=datetime.now(), leverage=5),
+            Position(
+                side=Side.LONG,
+                entry_price=100.0,
+                quantity=10.0,
+                tp_price=105.0,
+                sl_price=98.0,
+                entry_time=datetime.now(),
+                leverage=5,
+            ),
         ]
-        with patch.object(bot, '_close_position') as mock_close:
+        with patch.object(bot, "_close_position") as mock_close:
             await bot._check_position_exits()
             mock_close.assert_not_called()
 
@@ -411,9 +466,13 @@ class TestTradingBotClosePosition:
     async def test_long_profitable(self, mock_all):
         bot = create_bot(mocks=mock_all)
         position = Position(
-            side=Side.LONG, entry_price=100.0, quantity=10.0,
-            tp_price=105.0, sl_price=98.0,
-            entry_time=datetime.now(), leverage=5,
+            side=Side.LONG,
+            entry_price=100.0,
+            quantity=10.0,
+            tp_price=105.0,
+            sl_price=98.0,
+            entry_time=datetime.now(),
+            leverage=5,
         )
         bot.positions = [position]
         await bot._close_position(position, 105.0, "TP")
@@ -431,9 +490,13 @@ class TestTradingBotClosePosition:
     async def test_short_profitable(self, mock_all):
         bot = create_bot(mocks=mock_all)
         position = Position(
-            side=Side.SHORT, entry_price=100.0, quantity=10.0,
-            tp_price=95.0, sl_price=102.0,
-            entry_time=datetime.now(), leverage=5,
+            side=Side.SHORT,
+            entry_price=100.0,
+            quantity=10.0,
+            tp_price=95.0,
+            sl_price=102.0,
+            entry_time=datetime.now(),
+            leverage=5,
         )
         bot.positions = [position]
         await bot._close_position(position, 95.0, "TP")
@@ -445,9 +508,13 @@ class TestTradingBotClosePosition:
     async def test_losing_trade_increments_consecutive(self, mock_all):
         bot = create_bot(mocks=mock_all)
         position = Position(
-            side=Side.LONG, entry_price=100.0, quantity=10.0,
-            tp_price=105.0, sl_price=98.0,
-            entry_time=datetime.now(), leverage=5,
+            side=Side.LONG,
+            entry_price=100.0,
+            quantity=10.0,
+            tp_price=105.0,
+            sl_price=98.0,
+            entry_time=datetime.now(),
+            leverage=5,
         )
         bot.positions = [position]
         bot.consecutive_losses = 0
@@ -458,9 +525,13 @@ class TestTradingBotClosePosition:
     async def test_winning_trade_resets_consecutive(self, mock_all):
         bot = create_bot(mocks=mock_all)
         position = Position(
-            side=Side.LONG, entry_price=100.0, quantity=10.0,
-            tp_price=105.0, sl_price=98.0,
-            entry_time=datetime.now(), leverage=5,
+            side=Side.LONG,
+            entry_price=100.0,
+            quantity=10.0,
+            tp_price=105.0,
+            sl_price=98.0,
+            entry_time=datetime.now(),
+            leverage=5,
         )
         bot.positions = [position]
         bot.consecutive_losses = 2
@@ -474,12 +545,16 @@ class TestTradingBotClosePosition:
         bot.config.CIRCUIT_BREAKER_ENABLED = True
         bot.consecutive_losses = 2
         position = Position(
-            side=Side.LONG, entry_price=100.0, quantity=10.0,
-            tp_price=105.0, sl_price=98.0,
-            entry_time=datetime.now(), leverage=5,
+            side=Side.LONG,
+            entry_price=100.0,
+            quantity=10.0,
+            tp_price=105.0,
+            sl_price=98.0,
+            entry_time=datetime.now(),
+            leverage=5,
         )
         bot.positions = [position]
-        with patch.object(bot, '_trigger_circuit_breaker') as mock_trip:
+        with patch.object(bot, "_trigger_circuit_breaker") as mock_trip:
             await bot._close_position(position, 98.0, "SL")
             mock_trip.assert_called_once()
 
@@ -489,12 +564,16 @@ class TestTradingBotClosePosition:
         bot.config.CIRCUIT_BREAKER_ENABLED = True
         bot.consecutive_losses = 0
         position = Position(
-            side=Side.LONG, entry_price=100.0, quantity=10.0,
-            tp_price=105.0, sl_price=98.0,
-            entry_time=datetime.now(), leverage=5,
+            side=Side.LONG,
+            entry_price=100.0,
+            quantity=10.0,
+            tp_price=105.0,
+            sl_price=98.0,
+            entry_time=datetime.now(),
+            leverage=5,
         )
         bot.positions = [position]
-        with patch.object(bot, '_trigger_circuit_breaker') as mock_trip:
+        with patch.object(bot, "_trigger_circuit_breaker") as mock_trip:
             await bot._close_position(position, 98.0, "SL")
             mock_trip.assert_not_called()
 
@@ -504,9 +583,13 @@ class TestTradingBotClosePosition:
         bot.peak_equity = 10000
         bot.current_capital = 10000
         position = Position(
-            side=Side.LONG, entry_price=100.0, quantity=1.0,
-            tp_price=105.0, sl_price=98.0,
-            entry_time=datetime.now(), leverage=5,
+            side=Side.LONG,
+            entry_price=100.0,
+            quantity=1.0,
+            tp_price=105.0,
+            sl_price=98.0,
+            entry_time=datetime.now(),
+            leverage=5,
         )
         bot.positions = [position]
         await bot._close_position(position, 95.0, "SL")
@@ -515,9 +598,13 @@ class TestTradingBotClosePosition:
     async def test_daily_tracking(self, mock_all):
         bot = create_bot(mocks=mock_all)
         position = Position(
-            side=Side.LONG, entry_price=100.0, quantity=10.0,
-            tp_price=105.0, sl_price=98.0,
-            entry_time=datetime.now(), leverage=5,
+            side=Side.LONG,
+            entry_price=100.0,
+            quantity=10.0,
+            tp_price=105.0,
+            sl_price=98.0,
+            entry_time=datetime.now(),
+            leverage=5,
         )
         bot.positions = [position]
         await bot._close_position(position, 105.0, "TP")
@@ -526,9 +613,13 @@ class TestTradingBotClosePosition:
     async def test_database_save(self, mock_all):
         bot = create_bot(mocks=mock_all)
         position = Position(
-            side=Side.LONG, entry_price=100.0, quantity=10.0,
-            tp_price=105.0, sl_price=98.0,
-            entry_time=datetime.now(), leverage=5,
+            side=Side.LONG,
+            entry_price=100.0,
+            quantity=10.0,
+            tp_price=105.0,
+            sl_price=98.0,
+            entry_time=datetime.now(),
+            leverage=5,
         )
         bot.positions = [position]
         await bot._close_position(position, 105.0, "TP")
@@ -538,9 +629,13 @@ class TestTradingBotClosePosition:
     async def test_telegram_notification(self, mock_all):
         bot = create_bot(mocks=mock_all)
         position = Position(
-            side=Side.LONG, entry_price=100.0, quantity=10.0,
-            tp_price=105.0, sl_price=98.0,
-            entry_time=datetime.now(), leverage=5,
+            side=Side.LONG,
+            entry_price=100.0,
+            quantity=10.0,
+            tp_price=105.0,
+            sl_price=98.0,
+            entry_time=datetime.now(),
+            leverage=5,
         )
         bot.positions = [position]
         await bot._close_position(position, 105.0, "TP")
@@ -549,9 +644,13 @@ class TestTradingBotClosePosition:
     async def test_removes_from_positions(self, mock_all):
         bot = create_bot(mocks=mock_all)
         position = Position(
-            side=Side.LONG, entry_price=100.0, quantity=10.0,
-            tp_price=105.0, sl_price=98.0,
-            entry_time=datetime.now(), leverage=5,
+            side=Side.LONG,
+            entry_price=100.0,
+            quantity=10.0,
+            tp_price=105.0,
+            sl_price=98.0,
+            entry_time=datetime.now(),
+            leverage=5,
         )
         bot.positions = [position]
         await bot._close_position(position, 105.0, "TP")
@@ -575,9 +674,16 @@ class TestTradingBotDailyReset:
         bot.daily_trades = 5
         bot.daily_pnl = 100.0
         bot.daily_trades_list = [
-            Trade(side=Side.LONG, entry_price=100.0, exit_price=105.0,
-                  quantity=10.0, entry_time=datetime.now(), exit_time=datetime.now(),
-                  pnl=50.0, fees=2.0)
+            Trade(
+                side=Side.LONG,
+                entry_price=100.0,
+                exit_price=105.0,
+                quantity=10.0,
+                entry_time=datetime.now(),
+                exit_time=datetime.now(),
+                pnl=50.0,
+                fees=2.0,
+            )
         ]
         await bot._check_daily_reset()
         assert bot.daily_trades == 0
@@ -590,9 +696,16 @@ class TestTradingBotDailyReset:
         bot.last_trade_date = (datetime.utcnow() - timedelta(days=1)).date()
         bot.daily_trades = 1
         bot.daily_trades_list = [
-            Trade(side=Side.LONG, entry_price=100.0, exit_price=105.0,
-                  quantity=10.0, entry_time=datetime.now(), exit_time=datetime.now(),
-                  pnl=50.0, fees=2.0)
+            Trade(
+                side=Side.LONG,
+                entry_price=100.0,
+                exit_price=105.0,
+                quantity=10.0,
+                entry_time=datetime.now(),
+                exit_time=datetime.now(),
+                pnl=50.0,
+                fees=2.0,
+            )
         ]
         bot.daily_pnl = 50.0
         await bot._check_daily_reset()
@@ -672,18 +785,24 @@ class TestTradingBotForceClose:
         bot = create_bot(mocks=mock_all)
         bot.api.get_mids = AsyncMock(return_value={"HYPE": 105.0})
         bot.positions = [
-            Position(side=Side.LONG, entry_price=100.0, quantity=10.0,
-                     tp_price=105.0, sl_price=98.0,
-                     entry_time=datetime.now(), leverage=5),
+            Position(
+                side=Side.LONG,
+                entry_price=100.0,
+                quantity=10.0,
+                tp_price=105.0,
+                sl_price=98.0,
+                entry_time=datetime.now(),
+                leverage=5,
+            ),
         ]
-        with patch.object(bot, '_close_position') as mock_close:
+        with patch.object(bot, "_close_position") as mock_close:
             count = await bot.force_close_all_positions("TEST")
             assert count == 1
             mock_close.assert_called_once()
 
     async def test_close_all_positions(self, mock_all):
         bot = create_bot(mocks=mock_all)
-        with patch.object(bot, 'force_close_all_positions') as mock_fc:
+        with patch.object(bot, "force_close_all_positions") as mock_fc:
             await bot.close_all_positions()
             mock_fc.assert_called_once_with("MANUAL_CLOSE")
 
@@ -695,7 +814,7 @@ class TestTradingBotManualTrade:
     async def test_place_manual_trade(self, mock_all):
         bot = create_bot(mocks=mock_all)
         bot.api.get_mids = AsyncMock(return_value={"HYPE": 100.0})
-        with patch.object(bot, '_place_entry_order') as mock_entry:
+        with patch.object(bot, "_place_entry_order") as mock_entry:
             result = await bot.place_manual_trade(Side.LONG, 10.0)
             assert result["status"] == "ok"
             mock_entry.assert_called_once()
@@ -718,9 +837,13 @@ class TestTradingBotUnrealizedPnL:
         bot = create_bot(mocks=mock_all)
         bot.api.get_mids = AsyncMock(return_value={"HYPE": 105.0})
         position = Position(
-            side=Side.LONG, entry_price=100.0, quantity=10.0,
-            tp_price=105.0, sl_price=98.0,
-            entry_time=datetime.now(), leverage=5,
+            side=Side.LONG,
+            entry_price=100.0,
+            quantity=10.0,
+            tp_price=105.0,
+            sl_price=98.0,
+            entry_time=datetime.now(),
+            leverage=5,
             unrealized_pnl=0.0,
         )
         bot.positions = [position]
@@ -731,9 +854,13 @@ class TestTradingBotUnrealizedPnL:
         bot = create_bot(mocks=mock_all)
         bot.api.get_mids = AsyncMock(return_value={"HYPE": 95.0})
         position = Position(
-            side=Side.SHORT, entry_price=100.0, quantity=10.0,
-            tp_price=95.0, sl_price=102.0,
-            entry_time=datetime.now(), leverage=5,
+            side=Side.SHORT,
+            entry_price=100.0,
+            quantity=10.0,
+            tp_price=95.0,
+            sl_price=102.0,
+            entry_time=datetime.now(),
+            leverage=5,
             unrealized_pnl=0.0,
         )
         bot.positions = [position]
@@ -761,12 +888,26 @@ class TestTradingBotStatistics:
     def test_print_statistics_with_trades(self, mock_all, capsys):
         bot = create_bot(mocks=mock_all)
         bot.trades = [
-            Trade(side=Side.LONG, entry_price=100.0, exit_price=105.0,
-                  quantity=10.0, entry_time=datetime.now(), exit_time=datetime.now(),
-                  pnl=50.0, fees=2.0),
-            Trade(side=Side.SHORT, entry_price=100.0, exit_price=98.0,
-                  quantity=10.0, entry_time=datetime.now(), exit_time=datetime.now(),
-                  pnl=-20.0, fees=2.0),
+            Trade(
+                side=Side.LONG,
+                entry_price=100.0,
+                exit_price=105.0,
+                quantity=10.0,
+                entry_time=datetime.now(),
+                exit_time=datetime.now(),
+                pnl=50.0,
+                fees=2.0,
+            ),
+            Trade(
+                side=Side.SHORT,
+                entry_price=100.0,
+                exit_price=98.0,
+                quantity=10.0,
+                entry_time=datetime.now(),
+                exit_time=datetime.now(),
+                pnl=-20.0,
+                fees=2.0,
+            ),
         ]
         bot.print_statistics()
         captured = capsys.readouterr()
@@ -805,7 +946,7 @@ class TestTradingBotShutdown:
 
     async def test_stop(self, mock_all):
         bot = create_bot(mocks=mock_all)
-        with patch.object(bot, '_shutdown') as mock_shutdown:
+        with patch.object(bot, "_shutdown") as mock_shutdown:
             await bot.stop()
             assert bot.emergency_stop
             mock_shutdown.assert_called_once_with("Manual stop")
@@ -814,31 +955,37 @@ class TestTradingBotShutdown:
         bot = create_bot(mocks=mock_all)
         bot.api.get_mids = AsyncMock(return_value={"HYPE": 105.0})
         bot.positions = [
-            Position(side=Side.LONG, entry_price=100.0, quantity=10.0,
-                     tp_price=105.0, sl_price=98.0,
-                     entry_time=datetime.now(), leverage=5),
+            Position(
+                side=Side.LONG,
+                entry_price=100.0,
+                quantity=10.0,
+                tp_price=105.0,
+                sl_price=98.0,
+                entry_time=datetime.now(),
+                leverage=5,
+            ),
         ]
-        with patch.object(bot, '_close_position') as mock_close:
+        with patch.object(bot, "_close_position") as mock_close:
             await bot._shutdown("Test")
             mock_close.assert_called()
 
     async def test_shutdown_cancels_live_orders(self, mock_all):
         bot = create_bot(mocks=mock_all)
         bot.config.PAPER_TRADING = False
-        with patch.object(bot, '_close_position'):
+        with patch.object(bot, "_close_position"):
             await bot._shutdown("Test")
             assert bot.api.cancel_all_orders.called
 
     async def test_shutdown_skips_cancel_paper(self, mock_all):
         bot = create_bot(mocks=mock_all)
         bot.config.PAPER_TRADING = True
-        with patch.object(bot, '_close_position'):
+        with patch.object(bot, "_close_position"):
             await bot._shutdown("Test")
             assert not bot.api.cancel_all_orders.called
 
     async def test_shutdown_notifications(self, mock_all):
         bot = create_bot(mocks=mock_all)
-        with patch.object(bot, '_close_position'):
+        with patch.object(bot, "_close_position"):
             await bot._shutdown("Test")
             assert bot.telegram.notify_shutdown.called
             assert bot.db.close.called

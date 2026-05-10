@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, List, Optional, Dict
 from enum import Enum
 
-from ..core.config import Position, Trade, Side, OrderStatus
+from ..core.config import Position, Trade, Side
 
 logger = logging.getLogger(__name__)
 
@@ -299,7 +299,9 @@ class DatabaseManager:
         if position.oid:
             cursor.execute("SELECT id FROM positions WHERE oid = ?", (position.oid,))
         elif position.cloid:
-            cursor.execute("SELECT id FROM positions WHERE cloid = ?", (position.cloid,))
+            cursor.execute(
+                "SELECT id FROM positions WHERE cloid = ?", (position.cloid,)
+            )
         else:
             cursor.execute(
                 "SELECT id FROM positions WHERE entry_time = ? AND side = ?",

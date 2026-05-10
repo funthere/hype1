@@ -25,14 +25,13 @@ from typing import Dict, List
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.core.config import BotConfig, Side, Position
+from src.core.config import BotConfig, Side, Position, Trade
 from src.core.strategy import StrategyEngine
 from src.core.multi_asset import (
     AssetConfig,
     MultiAssetSignal,
     AssetAllocationMethod,
     MultiAssetStrategy,
-    create_default_multi_asset_config,
 )
 from src.exchange.connector import HyperliquidAPI
 from src.exchange.market_data import MarketDataFeed
@@ -95,9 +94,7 @@ class MultiAssetTradingBot:
             asset_config_obj.ASSET = asset_config.symbol
             asset_config_obj.PRIVATE_KEY = config.PRIVATE_KEY
             asset_config_obj.ADDRESS = config.ADDRESS
-            asset_config_obj.LEVERAGE = (
-                asset_config.leverage or config.LEVERAGE
-            )
+            asset_config_obj.LEVERAGE = asset_config.leverage or config.LEVERAGE
             asset_config_obj.RISK_PER_TRADE_PCT = (
                 asset_config.risk_per_trade or config.RISK_PER_TRADE_PCT
             )
@@ -121,7 +118,9 @@ class MultiAssetTradingBot:
 
         # Statistics
         self.start_time = None
-        self.starting_capital = config.PAPER_CAPITAL if config.PAPER_TRADING else 10000.0
+        self.starting_capital = (
+            config.PAPER_CAPITAL if config.PAPER_TRADING else 10000.0
+        )
         self.current_capital = self.starting_capital
 
     async def start(self):
@@ -143,9 +142,7 @@ class MultiAssetTradingBot:
 
         # Start market data feeds for all assets
         for asset, feed in self.market_feeds.items():
-            feed.on_candle_update(
-                lambda c, a=asset: self._on_candle_update(a, c)
-            )
+            feed.on_candle_update(lambda c, a=asset: self._on_candle_update(a, c))
             asyncio.create_task(feed.connect())
 
         # Main loop
@@ -310,7 +307,9 @@ class MultiAssetTradingBot:
         self, asset: str, position: Position, exit_price: float, reason: str
     ):
         """Close a position"""
-        logger.info(f"Closing {asset} {position.side.value} @ ${exit_price:.4f} ({reason})")
+        logger.info(
+            f"Closing {asset} {position.side.value} @ ${exit_price:.4f} ({reason})"
+        )
 
         # Calculate P&L
         if position.side == Side.LONG:
@@ -319,7 +318,9 @@ class MultiAssetTradingBot:
             pnl_gross = (position.entry_price - exit_price) * position.quantity
 
         pnl = pnl_gross * position.leverage
-        fees = abs(position.entry_price * position.quantity * self.config.MAKER_FEE_PCT * 2)
+        fees = abs(
+            position.entry_price * position.quantity * self.config.MAKER_FEE_PCT * 2
+        )
         net_pnl = pnl - fees
 
         # Create trade record
@@ -385,7 +386,9 @@ class MultiAssetTradingBot:
                 mids = await api.get_mids()
                 current_price = float(mids.get(asset, 0))
                 if current_price > 0:
-                    await self._close_position(asset, position, current_price, "SHUTDOWN")
+                    await self._close_position(
+                        asset, position, current_price, "SHUTDOWN"
+                    )
 
         # Close database
         self.db.close()
@@ -446,13 +449,15 @@ async def main():
     assets = []
     for i, asset in enumerate(args.assets):
         weight = args.weights[i] if args.weights else 1.0
-        assets.append(AssetConfig(
-            symbol=asset,
-            weight=weight,
-            max_positions=1,
-            min_signal_confidence=45,
-            enabled=True
-        ))
+        assets.append(
+            AssetConfig(
+                symbol=asset,
+                weight=weight,
+                max_positions=1,
+                min_signal_confidence=45,
+                enabled=True,
+            )
+        )
 
     # Load config
     config = BotConfig.from_env()
@@ -483,4 +488,5 @@ async def main():
 
 if __name__ == "__main__":
     from datetime import datetime
+
     asyncio.run(main())

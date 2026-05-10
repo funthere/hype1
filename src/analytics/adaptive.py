@@ -10,12 +10,11 @@ Implements self-optimizing parameters that adjust based on:
 import logging
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime
+from typing import List
 from enum import Enum
 
 import numpy as np
-import pandas as pd
 
 from ..core.config import BotConfig, Trade, Side
 
@@ -24,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 class VolatilityRegime(Enum):
     """Market volatility regimes"""
+
     LOW = "low"
     NORMAL = "normal"
     HIGH = "high"
@@ -32,6 +32,7 @@ class VolatilityRegime(Enum):
 
 class MarketPhase(Enum):
     """Market phase based on trend"""
+
     BULL = "bull"  # Uptrend
     BEAR = "bear"  # Downtrend
     RANGE = "range"  # Sideways
@@ -41,6 +42,7 @@ class MarketPhase(Enum):
 @dataclass
 class AdaptiveParameters:
     """Adaptive trading parameters"""
+
     # Risk parameters
     risk_per_trade: float
     leverage: int
@@ -107,7 +109,7 @@ class VolatilityDetector:
         percentiles = list(self.volt_percentiles)
         p25 = np.percentile(percentiles, 25)
         p50 = np.percentile(percentiles, 50)
-        p75 = np.percentile(percentiles, 75)
+        np.percentile(percentiles, 75)
         p90 = np.percentile(percentiles, 90)
 
         if vol <= p25:
@@ -261,7 +263,7 @@ class AdaptiveParameterManager:
         self,
         base_config: BotConfig,
         adaptation_interval: int = 300,  # seconds
-        min_interval: int = 60  # minimum seconds between adaptations
+        min_interval: int = 60,  # minimum seconds between adaptations
     ):
         """
         Initialize adaptive parameter manager
@@ -299,7 +301,7 @@ class AdaptiveParameterManager:
             sl_multiplier=self.base_config.SL_ATR_MULTIPLIER,
             volatility_regime=VolatilityRegime.NORMAL,
             market_phase=MarketPhase.TRANSITION,
-            updated_at=datetime.now()
+            updated_at=datetime.now(),
         )
 
     def update_market_data(self, price: float) -> bool:
@@ -318,12 +320,17 @@ class AdaptiveParameterManager:
 
         # Check if we should adapt
         now = datetime.now()
-        if self.last_adaptation and (now - self.last_adaptation).total_seconds() < self.min_interval:
+        if (
+            self.last_adaptation
+            and (now - self.last_adaptation).total_seconds() < self.min_interval
+        ):
             return False
 
         # Check if conditions changed significantly
-        if (vol_regime == self.current_params.volatility_regime and
-            phase == self.current_params.market_phase):
+        if (
+            vol_regime == self.current_params.volatility_regime
+            and phase == self.current_params.market_phase
+        ):
             return False
 
         # Calculate new parameters
@@ -344,35 +351,56 @@ class AdaptiveParameterManager:
         return True
 
     def _calculate_parameters(
-        self,
-        vol_regime: VolatilityRegime,
-        phase: MarketPhase
+        self, vol_regime: VolatilityRegime, phase: MarketPhase
     ) -> AdaptiveParameters:
         """Calculate adaptive parameters based on conditions"""
         # Get volatility adjustments
-        vol_adj = self.VOLATILITY_MULTIPLIERS.get(vol_regime, self.VOLATILITY_MULTIPLIERS[VolatilityRegime.NORMAL])
+        vol_adj = self.VOLATILITY_MULTIPLIERS.get(
+            vol_regime, self.VOLATILITY_MULTIPLIERS[VolatilityRegime.NORMAL]
+        )
 
         # Get phase adjustments
-        phase_adj = self.PHASE_ADJUSTMENTS.get(phase, self.PHASE_ADJUSTMENTS[MarketPhase.TRANSITION])
+        phase_adj = self.PHASE_ADJUSTMENTS.get(
+            phase, self.PHASE_ADJUSTMENTS[MarketPhase.TRANSITION]
+        )
 
         # Apply adjustments
-        new_leverage = max(1, min(
-            100,
-            int(self.base_config.LEVERAGE * vol_adj["leverage_factor"] * self.performance_multiplier)
-        ))
+        new_leverage = max(
+            1,
+            min(
+                100,
+                int(
+                    self.base_config.LEVERAGE
+                    * vol_adj["leverage_factor"]
+                    * self.performance_multiplier
+                ),
+            ),
+        )
 
-        new_risk = max(0.01, min(
-            0.50,
-            self.base_config.RISK_PER_TRADE_PCT * vol_adj["risk_factor"] * self.performance_multiplier
-        ))
+        new_risk = max(
+            0.01,
+            min(
+                0.50,
+                self.base_config.RISK_PER_TRADE_PCT
+                * vol_adj["risk_factor"]
+                * self.performance_multiplier,
+            ),
+        )
 
         new_tp = self.base_config.TP_ATR_MULTIPLIER * vol_adj["tp_factor"]
         new_sl = self.base_config.SL_ATR_MULTIPLIER * vol_adj["sl_factor"]
 
         # Confidence threshold adjustment
-        new_confidence = max(30, min(90, (
-            self.base_config.CONFIDENCE_THRESHOLD + phase_adj["confidence_adjust"]
-        )))
+        new_confidence = max(
+            30,
+            min(
+                90,
+                (
+                    self.base_config.CONFIDENCE_THRESHOLD
+                    + phase_adj["confidence_adjust"]
+                ),
+            ),
+        )
 
         return AdaptiveParameters(
             risk_per_trade=new_risk,
@@ -382,7 +410,7 @@ class AdaptiveParameterManager:
             sl_multiplier=new_sl,
             volatility_regime=vol_regime,
             market_phase=phase,
-            updated_at=datetime.now()
+            updated_at=datetime.now(),
         )
 
     def record_trade(self, trade: Trade):
@@ -477,5 +505,5 @@ class AdaptiveParameterManager:
 📈 PERFORMANCE ADJUSTMENT
 ────────────────────────────────────────────────────────────
   Performance Mult:     {self.performance_multiplier:>12.2f}x
-  Last Adaptation:      {p.updated_at.strftime('%H:%M:%S'):>12}
+  Last Adaptation:      {p.updated_at.strftime("%H:%M:%S"):>12}
 """

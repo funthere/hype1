@@ -9,7 +9,6 @@ from typing import List, Optional, Dict
 from eth_account import Account
 from hyperliquid.info import Info
 from hyperliquid.exchange import Exchange
-from hyperliquid.utils import constants
 
 from ..core.config import BotConfig, Side
 
@@ -102,7 +101,7 @@ class HyperliquidAPI:
             Dict with order result
         """
         try:
-            asset_index = await self.get_asset_index()
+            await self.get_asset_index()
 
             order_result = await asyncio.to_thread(
                 self.exchange.order,
@@ -121,7 +120,9 @@ class HyperliquidAPI:
                     "response": order_result.get("response", {}),
                 }
             else:
-                error_msg = order_result.get("response", {}).get("error", "Unknown error")
+                error_msg = order_result.get("response", {}).get(
+                    "error", "Unknown error"
+                )
                 logger.error(f"Order failed: {error_msg}")
                 return {"status": "error", "msg": error_msg}
 
@@ -132,7 +133,9 @@ class HyperliquidAPI:
     async def cancel_order(self, oid: int) -> Dict:
         """Cancel order by order ID"""
         try:
-            result = await asyncio.to_thread(self.exchange.cancel, coin=self.config.ASSET, oid=oid)
+            result = await asyncio.to_thread(
+                self.exchange.cancel, coin=self.config.ASSET, oid=oid
+            )
 
             if result.get("status") == "ok":
                 logger.info(f"Cancelled order {oid}")
@@ -244,7 +247,9 @@ class HyperliquidAPI:
         try:
             result = await asyncio.to_thread(
                 self.exchange.update_leverage,
-                leverage=leverage, coin=self.config.ASSET, is_cross=is_cross
+                leverage=leverage,
+                coin=self.config.ASSET,
+                is_cross=is_cross,
             )
 
             if result.get("status") == "ok":

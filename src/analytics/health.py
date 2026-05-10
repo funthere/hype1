@@ -9,13 +9,12 @@ Tracks:
 - System resource usage
 """
 
-import asyncio
 import logging
 import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List
 from enum import Enum
 
 import psutil
@@ -26,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 class HealthStatus(Enum):
     """Health status levels"""
+
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     UNHEALTHY = "unhealthy"
@@ -34,6 +34,7 @@ class HealthStatus(Enum):
 @dataclass
 class APIMetrics:
     """API performance metrics"""
+
     avg_latency_ms: float = 0.0
     p95_latency_ms: float = 0.0
     p99_latency_ms: float = 0.0
@@ -47,6 +48,7 @@ class APIMetrics:
 @dataclass
 class ExecutionMetrics:
     """Order execution metrics"""
+
     fill_rate: float = 1.0
     avg_slippage_bps: float = 0.0  # Basis points
     total_orders: int = 0
@@ -59,6 +61,7 @@ class ExecutionMetrics:
 @dataclass
 class SystemMetrics:
     """System resource metrics"""
+
     cpu_percent: float = 0.0
     memory_percent: float = 0.0
     memory_mb: float = 0.0
@@ -70,6 +73,7 @@ class SystemMetrics:
 @dataclass
 class HealthSnapshot:
     """Complete health snapshot at a point in time"""
+
     timestamp: datetime
     status: HealthStatus
     api: APIMetrics
@@ -124,7 +128,7 @@ class HealthMonitor:
         endpoint: str,
         latency_ms: float,
         success: bool,
-        error: Optional[str] = None
+        error: Optional[str] = None,
     ):
         """
         Record an API call for metrics
@@ -139,11 +143,9 @@ class HealthMonitor:
         self._request_times.append(datetime.now())
 
         if not success:
-            self._api_errors.append({
-                "endpoint": endpoint,
-                "error": error,
-                "timestamp": datetime.now()
-            })
+            self._api_errors.append(
+                {"endpoint": endpoint, "error": error, "timestamp": datetime.now()}
+            )
 
     def record_order(
         self,
@@ -152,7 +154,7 @@ class HealthMonitor:
         filled_price: float,
         quantity: float,
         fill_time_ms: float,
-        status: str  # "filled", "partial", "rejected"
+        status: str,  # "filled", "partial", "rejected"
     ):
         """
         Record an order execution
@@ -170,15 +172,17 @@ class HealthMonitor:
             slippage = abs((filled_price - expected_price) / expected_price) * 10000
             self._slippages.append(slippage)
 
-        self._orders.append({
-            "side": side,
-            "expected_price": expected_price,
-            "filled_price": filled_price,
-            "quantity": quantity,
-            "fill_time_ms": fill_time_ms,
-            "status": status,
-            "timestamp": datetime.now()
-        })
+        self._orders.append(
+            {
+                "side": side,
+                "expected_price": expected_price,
+                "filled_price": filled_price,
+                "quantity": quantity,
+                "fill_time_ms": fill_time_ms,
+                "status": status,
+                "timestamp": datetime.now(),
+            }
+        )
 
         # Clean old orders
         cutoff = datetime.now() - timedelta(hours=self.MEMORY_HOURS)
@@ -198,19 +202,25 @@ class HealthMonitor:
         p95_idx = int(len(sorted_latencies) * 0.95)
         p99_idx = int(len(sorted_latencies) * 0.99)
 
-        recent_errors = [e for e in errors if (datetime.now() - e["timestamp"]).seconds < 300]
+        recent_errors = [
+            e for e in errors if (datetime.now() - e["timestamp"]).seconds < 300
+        ]
 
         last_error_info = recent_errors[-1] if recent_errors else None
 
         return APIMetrics(
             avg_latency_ms=avg_latency,
-            p95_latency_ms=sorted_latencies[p95_idx] if p95_idx < len(latencies) else latencies[-1],
-            p99_latency_ms=sorted_latencies[p99_idx] if p99_idx < len(latencies) else latencies[-1],
+            p95_latency_ms=sorted_latencies[p95_idx]
+            if p95_idx < len(latencies)
+            else latencies[-1],
+            p99_latency_ms=sorted_latencies[p99_idx]
+            if p99_idx < len(latencies)
+            else latencies[-1],
             success_rate=1.0 - (len(recent_errors) / max(len(latencies), 1)),
             error_count=len(recent_errors),
             total_requests=len(latencies),
             last_error=last_error_info["error"] if last_error_info else None,
-            last_error_time=last_error_info["timestamp"] if last_error_info else None
+            last_error_time=last_error_info["timestamp"] if last_error_info else None,
         )
 
     def get_execution_metrics(self) -> ExecutionMetrics:
@@ -219,7 +229,8 @@ class HealthMonitor:
             return ExecutionMetrics()
 
         recent_orders = [
-            o for o in self._orders
+            o
+            for o in self._orders
             if (datetime.now() - o["timestamp"]).total_seconds() < 3600
         ]
 
@@ -243,7 +254,7 @@ class HealthMonitor:
             filled_orders=len(filled),
             partial_fills=len(partial),
             rejected_orders=len(rejected),
-            avg_fill_time_ms=avg_fill_time
+            avg_fill_time_ms=avg_fill_time,
         )
 
     def get_system_metrics(self) -> SystemMetrics:
@@ -257,9 +268,9 @@ class HealthMonitor:
                 cpu_percent=cpu,
                 memory_percent=memory_percent,
                 memory_mb=mem_info.rss / 1024 / 1024,
-                disk_usage_percent=psutil.disk_usage('/').percent,
+                disk_usage_percent=psutil.disk_usage("/").percent,
                 open_files=len(self._process.open_files()),
-                threads=self._process.num_threads()
+                threads=self._process.num_threads(),
             )
         except Exception as e:
             logger.error(f"Error getting system metrics: {e}")
@@ -283,7 +294,7 @@ class HealthMonitor:
             api=api,
             execution=execution,
             system=system,
-            alerts=alerts
+            alerts=alerts,
         )
 
         # Store snapshot
@@ -294,10 +305,7 @@ class HealthMonitor:
         return snapshot
 
     def _calculate_status(
-        self,
-        api: APIMetrics,
-        execution: ExecutionMetrics,
-        system: SystemMetrics
+        self, api: APIMetrics, execution: ExecutionMetrics, system: SystemMetrics
     ) -> HealthStatus:
         """Calculate overall health status"""
         issues = 0
@@ -328,10 +336,7 @@ class HealthMonitor:
             return HealthStatus.UNHEALTHY
 
     def _generate_alerts(
-        self,
-        api: APIMetrics,
-        execution: ExecutionMetrics,
-        system: SystemMetrics
+        self, api: APIMetrics, execution: ExecutionMetrics, system: SystemMetrics
     ) -> List[str]:
         """Generate list of alerts for current issues"""
         alerts = []
@@ -366,10 +371,7 @@ class HealthMonitor:
         """Check if system is healthy"""
         return self._status == HealthStatus.HEALTHY
 
-    def get_metrics_history(
-        self,
-        hours: int = 1
-    ) -> List[HealthSnapshot]:
+    def get_metrics_history(self, hours: int = 1) -> List[HealthSnapshot]:
         """Get historical health snapshots"""
         cutoff = datetime.now() - timedelta(hours=hours)
         return [s for s in self._snapshots if s.timestamp >= cutoff]
@@ -381,7 +383,7 @@ class HealthMonitor:
         status_emoji = {
             HealthStatus.HEALTHY: "🟢",
             HealthStatus.DEGRADED: "🟡",
-            HealthStatus.UNHEALTHY: "🔴"
+            HealthStatus.UNHEALTHY: "🔴",
         }
 
         summary = f"""
@@ -438,10 +440,7 @@ class APITimer:
             self.error = str(exc_val)
 
         await self.monitor.record_api_call(
-            self.endpoint,
-            latency_ms,
-            self.success,
-            self.error
+            self.endpoint, latency_ms, self.success, self.error
         )
 
 

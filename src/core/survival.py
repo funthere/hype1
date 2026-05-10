@@ -6,7 +6,6 @@ rather than maximum profit.
 """
 
 from dataclasses import dataclass
-from typing import Optional
 from enum import Enum
 
 from ..core.config import BotConfig
@@ -14,10 +13,11 @@ from ..core.config import BotConfig
 
 class RiskProfile(Enum):
     """Risk profiles with different survival vs return tradeoffs"""
+
     ULTRA_CONSERVATIVE = "ultra_conservative"  # Maximum survival
-    CONSERVATIVE = "conservative"              # Balance tilted to survival
-    MODERATE = "moderate"                      # Balanced approach
-    AGGRESSIVE = "aggressive"                  # Higher risk, lower survival
+    CONSERVATIVE = "conservative"  # Balance tilted to survival
+    MODERATE = "moderate"  # Balanced approach
+    AGGRESSIVE = "aggressive"  # Higher risk, lower survival
 
 
 @dataclass
@@ -29,45 +29,45 @@ class SurvivalConfig:
     """
 
     # Daily loss limits (most critical for survival)
-    MAX_DAILY_LOSS_PCT: float = 0.03           # 3% daily stop (was 15%)
+    MAX_DAILY_LOSS_PCT: float = 0.03  # 3% daily stop (was 15%)
     MAX_DRAWDOWN_FROM_PEAK_PCT: float = 0.10  # 10% max drawdown shutdown
 
     # Position sizing (reduced for survival)
-    RISK_PER_TRADE_PCT: float = 0.02           # 2% per trade (was 8%)
-    MAX_POSITION_HEAT_PCT: float = 0.05        # 5% max per "trade idea"
+    RISK_PER_TRADE_PCT: float = 0.02  # 2% per trade (was 8%)
+    MAX_POSITION_HEAT_PCT: float = 0.05  # 5% max per "trade idea"
 
     # Leverage (lowered for survival)
-    LEVERAGE: int = 3                           # 3x (was 5x)
+    LEVERAGE: int = 3  # 3x (was 5x)
     VOLATILITY_LEVERAGE_REDUCTION: bool = True  # Reduce leverage in high vol
 
     # Circuit breaker (faster intervention)
-    MAX_CONSECUTIVE_LOSSES: int = 2            # 2 losses (was 3)
-    CIRCUIT_BREAKER_COOLDOWN_MINUTES: int = 60 # 60 min (was 30)
+    MAX_CONSECUTIVE_LOSSES: int = 2  # 2 losses (was 3)
+    CIRCUIT_BREAKER_COOLDOWN_MINUTES: int = 60  # 60 min (was 30)
 
     # Trading frequency limits
-    MAX_DAILY_TRADES: int = 10                 # 10 trades (was 20)
+    MAX_DAILY_TRADES: int = 10  # 10 trades (was 20)
     MIN_TIME_BETWEEN_TRADES_MINUTES: int = 15  # 15 min between trades
 
     # Time-based restrictions
-    AVOID_LOW_LIQUIDITY_HOURS: bool = True     # Avoid weekends/holidays
-    AVOID_FIRST_LAST_MINUTES: int = 30         # Avoid open/close volatility
+    AVOID_LOW_LIQUIDITY_HOURS: bool = True  # Avoid weekends/holidays
+    AVOID_FIRST_LAST_MINUTES: int = 30  # Avoid open/close volatility
 
     # Tiered risk reduction
-    TIERED_RISK_REDUCTION: bool = True         # Reduce risk after losses
-    TIER_1_AFTER_LOSSES: int = 2              # Reduce after 2 losses
-    TIER_1_REDUCTION_PCT: float = 0.50         # Cut risk by 50%
-    TIER_2_DAILY_LOSS_PCT: float = 0.02       # 2% daily loss triggers tier 2
-    TIER_2_REDUCTION_PCT: float = 0.25         # Cut risk by 75%
+    TIERED_RISK_REDUCTION: bool = True  # Reduce risk after losses
+    TIER_1_AFTER_LOSSES: int = 2  # Reduce after 2 losses
+    TIER_1_REDUCTION_PCT: float = 0.50  # Cut risk by 50%
+    TIER_2_DAILY_LOSS_PCT: float = 0.02  # 2% daily loss triggers tier 2
+    TIER_2_REDUCTION_PCT: float = 0.25  # Cut risk by 75%
 
     # Position heat (don't add to losing positions)
-    POSITION_HEAT_LIMIT: int = 1               # Max 1 position per direction per asset
-    REDUCE_ON_HEAT: bool = True                # Reduce size when adding to same direction
+    POSITION_HEAT_LIMIT: int = 1  # Max 1 position per direction per asset
+    REDUCE_ON_HEAT: bool = True  # Reduce size when adding to same direction
 
     # Profit management (lock in profits)
-    PARTIAL_TP_ENABLED: bool = True            # Take partial profits
-    PARTIAL_TP_AT_R: float = 1.0               # At 1x risk
-    PARTIAL_TP_PCT: float = 0.50               # Close 50%
-    MOVE_TO_BREAKEVEN_AT_R: float = 1.0        # Move SL to breakeven at 1R
+    PARTIAL_TP_ENABLED: bool = True  # Take partial profits
+    PARTIAL_TP_AT_R: float = 1.0  # At 1x risk
+    PARTIAL_TP_PCT: float = 0.50  # Close 50%
+    MOVE_TO_BREAKEVEN_AT_R: float = 1.0  # Move SL to breakeven at 1R
 
 
 class SurvivalBotConfig(BotConfig):
@@ -92,8 +92,8 @@ class SurvivalBotConfig(BotConfig):
         survival = SurvivalConfig()
 
         if profile == RiskProfile.ULTRA_CONSERVATIVE:
-            self.MAX_DAILY_LOSS_PCT = 0.01          # 1% daily
-            self.RISK_PER_TRADE_PCT = 0.01          # 1% per trade
+            self.MAX_DAILY_LOSS_PCT = 0.01  # 1% daily
+            self.RISK_PER_TRADE_PCT = 0.01  # 1% per trade
             self.LEVERAGE = 2
             self.MAX_DAILY_TRADES = 5
             self.MAX_CONSECUTIVE_LOSSES = 1
@@ -106,8 +106,8 @@ class SurvivalBotConfig(BotConfig):
             self.MAX_CONSECUTIVE_LOSSES = survival.MAX_CONSECUTIVE_LOSSES
 
         elif profile == RiskProfile.MODERATE:
-            self.MAX_DAILY_LOSS_PCT = 0.05          # 5% daily
-            self.RISK_PER_TRADE_PCT = 0.04          # 4% per trade
+            self.MAX_DAILY_LOSS_PCT = 0.05  # 5% daily
+            self.RISK_PER_TRADE_PCT = 0.04  # 4% per trade
             self.LEVERAGE = 5
             self.MAX_DAILY_TRADES = 15
             self.MAX_CONSECUTIVE_LOSSES = 3
@@ -122,7 +122,9 @@ class SurvivalBotConfig(BotConfig):
 
         # Survival-specific settings (apply to all profiles)
         self.CIRCUIT_BREAKER_ENABLED = True
-        self.CIRCUIT_BREAKER_COOLDOWN_MINUTES = survival.CIRCUIT_BREAKER_COOLDOWN_MINUTES
+        self.CIRCUIT_BREAKER_COOLDOWN_MINUTES = (
+            survival.CIRCUIT_BREAKER_COOLDOWN_MINUTES
+        )
         self.EMERGENCY_SHUTDOWN = False
 
     def validate_survival_settings(self) -> bool:
@@ -156,7 +158,7 @@ class SurvivalBotConfig(BotConfig):
 def create_survival_config(
     profile: RiskProfile = RiskProfile.CONSERVATIVE,
     private_key: str = "",
-    paper_trading: bool = True
+    paper_trading: bool = True,
 ) -> SurvivalBotConfig:
     """
     Factory function to create a survival-focused bot configuration.

@@ -11,13 +11,14 @@ from enum import Enum
 import numpy as np
 import pandas as pd
 
-from .config import BotConfig, Side, Position, Trade
+from .config import BotConfig, Side, Position
 
 logger = logging.getLogger(__name__)
 
 
 class AssetAllocationMethod(Enum):
     """Methods for allocating capital across assets"""
+
     EQUAL_WEIGHT = "equal_weight"
     RISK_PARITY = "risk_parity"
     SIGNAL_STRENGTH = "signal_strength"
@@ -27,6 +28,7 @@ class AssetAllocationMethod(Enum):
 @dataclass
 class AssetConfig:
     """Configuration for a single asset"""
+
     symbol: str
     weight: float = 1.0  # Relative weight in portfolio
     max_positions: int = 1  # Max concurrent positions for this asset
@@ -41,6 +43,7 @@ class AssetConfig:
 @dataclass
 class MultiAssetSignal:
     """Signal for a specific asset"""
+
     asset: str
     action: Side
     confidence: float
@@ -81,7 +84,7 @@ class CorrelationFilter:
 
         # Keep only recent prices
         if len(self.price_history[asset]) > self.window * 2:
-            self.price_history[asset] = self.price_history[asset][-self.window * 2:]
+            self.price_history[asset] = self.price_history[asset][-self.window * 2 :]
 
     def get_correlation(self, asset1: str, asset2: str) -> Optional[float]:
         """Calculate correlation between two assets"""
@@ -120,7 +123,7 @@ class CorrelationFilter:
         """
         for position in existing_positions:
             # Extract asset from position (assuming position has asset field)
-            pos_asset = getattr(position, 'asset', None)
+            pos_asset = getattr(position, "asset", None)
             if not pos_asset:
                 continue
 
@@ -159,7 +162,7 @@ class MultiAssetStrategy:
         base_config: BotConfig,
         assets: List[AssetConfig],
         allocation_method: AssetAllocationMethod = AssetAllocationMethod.EQUAL_WEIGHT,
-        max_correlation: float = 0.7
+        max_correlation: float = 0.7,
     ):
         """
         Initialize multi-asset strategy
@@ -222,10 +225,7 @@ class MultiAssetStrategy:
         self.correlation_filter.update_price(asset, price)
 
     def can_trade_asset(
-        self,
-        asset: str,
-        signal: MultiAssetSignal,
-        all_positions: List[Position]
+        self, asset: str, signal: MultiAssetSignal, all_positions: List[Position]
     ) -> Tuple[bool, str]:
         """
         Check if asset can be traded
@@ -243,7 +243,10 @@ class MultiAssetStrategy:
         # Check max positions for this asset
         current_positions = self.asset_positions.get(asset, [])
         if len(current_positions) >= asset_config.max_positions:
-            return False, f"Max positions ({asset_config.max_positions}) reached for {asset}"
+            return (
+                False,
+                f"Max positions ({asset_config.max_positions}) reached for {asset}",
+            )
 
         # Check correlation filter
         if self.correlation_filter.is_correlated(asset, all_positions):
@@ -255,15 +258,15 @@ class MultiAssetStrategy:
             min_conf = 100 - min_conf
 
         if signal.confidence < min_conf:
-            return False, f"Signal confidence ({signal.confidence}) below threshold ({min_conf})"
+            return (
+                False,
+                f"Signal confidence ({signal.confidence}) below threshold ({min_conf})",
+            )
 
         return True, ""
 
     def calculate_position_size(
-        self,
-        asset: str,
-        signal: MultiAssetSignal,
-        total_capital: float
+        self, asset: str, signal: MultiAssetSignal, total_capital: float
     ) -> float:
         """
         Calculate position size for an asset
@@ -351,7 +354,7 @@ class MultiAssetStrategy:
             "num_positions": sum(len(p) for p in self.asset_positions.values()),
             "num_assets_with_positions": sum(
                 1 for p in self.asset_positions.values() if p
-            )
+            ),
         }
 
     def get_asset_summary(self) -> pd.DataFrame:
@@ -361,22 +364,23 @@ class MultiAssetStrategy:
             positions = self.asset_positions.get(asset, [])
             allocation = self.allocations.get(asset, 0)
 
-            data.append({
-                "Asset": asset,
-                "Weight": config.weight,
-                "Allocation": f"{allocation:.1%}",
-                "Positions": len(positions),
-                "Max Positions": config.max_positions,
-                "Min Confidence": config.min_signal_confidence,
-                "Enabled": config.enabled
-            })
+            data.append(
+                {
+                    "Asset": asset,
+                    "Weight": config.weight,
+                    "Allocation": f"{allocation:.1%}",
+                    "Positions": len(positions),
+                    "Max Positions": config.max_positions,
+                    "Min Confidence": config.min_signal_confidence,
+                    "Enabled": config.enabled,
+                }
+            )
 
         return pd.DataFrame(data)
 
 
 def create_default_multi_asset_config(
-    assets: List[str],
-    equal_weights: bool = True
+    assets: List[str], equal_weights: bool = True
 ) -> List[AssetConfig]:
     """
     Create default asset configurations for a list of assets
@@ -392,12 +396,14 @@ def create_default_multi_asset_config(
 
     for asset in assets:
         weight = 1.0 if equal_weights else 1.0  # Can be customized
-        configs.append(AssetConfig(
-            symbol=asset,
-            weight=weight,
-            max_positions=1,
-            min_signal_confidence=45,
-            enabled=True
-        ))
+        configs.append(
+            AssetConfig(
+                symbol=asset,
+                weight=weight,
+                max_positions=1,
+                min_signal_confidence=45,
+                enabled=True,
+            )
+        )
 
     return configs

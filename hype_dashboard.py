@@ -12,14 +12,11 @@ The dashboard connects to the bot's API server (default: http://127.0.0.1:8000)
 
 import os
 import time
-import asyncio
-from datetime import datetime, timedelta
-from typing import Optional, List, Dict
+from typing import List
 
 import streamlit as st
 import requests
 import plotly.graph_objects as go
-import plotly.express as px
 import pandas as pd
 
 # Configuration
@@ -36,7 +33,9 @@ class BotAPIClient:
     def get(self, endpoint: str, params: dict = None) -> dict:
         """Make GET request to API"""
         try:
-            response = requests.get(f"{self.base_url}{endpoint}", params=params, timeout=5)
+            response = requests.get(
+                f"{self.base_url}{endpoint}", params=params, timeout=5
+            )
             response.raise_for_status()
             return response.json()
         except requests.RequestException as e:
@@ -46,7 +45,9 @@ class BotAPIClient:
     def post(self, endpoint: str, data: dict = None) -> dict:
         """Make POST request to API"""
         try:
-            response = requests.post(f"{self.base_url}{endpoint}", json=data, timeout=10)
+            response = requests.post(
+                f"{self.base_url}{endpoint}", json=data, timeout=10
+            )
             response.raise_for_status()
             return response.json()
         except requests.RequestException as e:
@@ -75,7 +76,9 @@ class BotAPIClient:
         return self.post("/api/control", {"action": action, "params": params})
 
     def manual_trade(self, side: str, quantity: float, price: float = None) -> dict:
-        return self.post("/api/manual-trade", {"side": side, "quantity": quantity, "price": price})
+        return self.post(
+            "/api/manual-trade", {"side": side, "quantity": quantity, "price": price}
+        )
 
 
 def format_currency(value: float) -> str:
@@ -117,19 +120,21 @@ def create_pnl_chart(trades: List[dict]) -> go.Figure:
         return fig
 
     df = pd.DataFrame(trades)
-    df['exit_time'] = pd.to_datetime(df['exit_time'])
-    df = df.sort_values('exit_time')
-    df['cumulative_pnl'] = df['pnl'].cumsum()
+    df["exit_time"] = pd.to_datetime(df["exit_time"])
+    df = df.sort_values("exit_time")
+    df["cumulative_pnl"] = df["pnl"].cumsum()
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df['exit_time'],
-        y=df['cumulative_pnl'],
-        mode='lines+markers',
-        name='Cumulative P&L',
-        line=dict(color='#00CC96', width=2),
-        marker=dict(size=6)
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=df["exit_time"],
+            y=df["cumulative_pnl"],
+            mode="lines+markers",
+            name="Cumulative P&L",
+            line=dict(color="#00CC96", width=2),
+            marker=dict(size=6),
+        )
+    )
 
     fig.add_hline(y=0, line_dash="dash", line_color="gray")
 
@@ -137,9 +142,9 @@ def create_pnl_chart(trades: List[dict]) -> go.Figure:
         title="Cumulative P&L Over Time",
         xaxis_title="Time",
         yaxis_title="Cumulative P&L ($)",
-        hovermode='x unified',
-        template='plotly_dark',
-        height=300
+        hovermode="x unified",
+        template="plotly_dark",
+        height=300,
     )
 
     return fig
@@ -147,26 +152,30 @@ def create_pnl_chart(trades: List[dict]) -> go.Figure:
 
 def create_win_rate_chart(stats: dict) -> go.Figure:
     """Create win rate pie chart"""
-    winning = stats.get('winning_trades', 0)
-    losing = stats.get('losing_trades', 0)
+    winning = stats.get("winning_trades", 0)
+    losing = stats.get("losing_trades", 0)
 
     if winning + losing == 0:
         fig = go.Figure()
         fig.add_annotation(text="No trades yet", showarrow=False)
         return fig
 
-    fig = go.Figure(data=[go.Pie(
-        labels=['Winning', 'Losing'],
-        values=[winning, losing],
-        marker=dict(colors=['#00CC96', '#FF6692']),
-        hole=0.4
-    )])
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=["Winning", "Losing"],
+                values=[winning, losing],
+                marker=dict(colors=["#00CC96", "#FF6692"]),
+                hole=0.4,
+            )
+        ]
+    )
 
     fig.update_layout(
         title=f"Win Rate: {stats.get('win_rate', 0):.1f}%",
-        template='plotly_dark',
+        template="plotly_dark",
         height=300,
-        margin=dict(l=0, r=0, t=30, b=0)
+        margin=dict(l=0, r=0, t=30, b=0),
     )
 
     return fig
@@ -174,40 +183,35 @@ def create_win_rate_chart(stats: dict) -> go.Figure:
 
 def render_status_bar(status: dict):
     """Render status bar at top of dashboard"""
-    is_running = status.get('is_running', False)
-    is_paused = status.get('is_paused', False)
-    mode = status.get('mode', 'unknown')
-    asset = status.get('asset', 'N/A')
-    uptime = status.get('uptime_seconds', 0)
+    is_running = status.get("is_running", False)
+    is_paused = status.get("is_paused", False)
+    mode = status.get("mode", "unknown")
+    asset = status.get("asset", "N/A")
+    uptime = status.get("uptime_seconds", 0)
 
     # Status indicator
     if is_paused:
         status_icon = "⏸️"
-        status_color = "orange"
         status_text = "PAUSED"
     elif is_running:
         status_icon = "🟢"
-        status_color = "green"
         status_text = "RUNNING"
     else:
         status_icon = "🔴"
-        status_color = "red"
         status_text = "STOPPED"
 
     # Mode badge
-    mode_colors = {
-        "paper": "blue",
-        "testnet": "purple",
-        "mainnet": "red"
-    }
+    mode_colors = {"paper": "blue", "testnet": "purple", "mainnet": "red"}
     mode_color = mode_colors.get(mode, "gray")
 
     cols = st.columns([3, 2, 2, 3])
     with cols[0]:
         st.markdown(f"{status_icon} **{status_text}**")
     with cols[1]:
-        st.markdown(f"<span style='color:{mode_color}'>**{mode.upper()}**</span>",
-                   unsafe_allow_html=True)
+        st.markdown(
+            f"<span style='color:{mode_color}'>**{mode.upper()}**</span>",
+            unsafe_allow_html=True,
+        )
     with cols[2]:
         st.markdown(f"**{asset}**")
     with cols[3]:
@@ -218,14 +222,13 @@ def render_status_bar(status: dict):
 
 def render_stats_cards(stats: dict):
     """Render statistics cards"""
-    total_pnl = stats.get('total_pnl', 0)
-    total_return = stats.get('total_return_pct', 0)
-    win_rate = stats.get('win_rate', 0)
-    total_trades = stats.get('total_trades', 0)
-    current_capital = stats.get('current_capital', 0)
+    total_pnl = stats.get("total_pnl", 0)
+    total_return = stats.get("total_return_pct", 0)
+    win_rate = stats.get("win_rate", 0)
+    total_trades = stats.get("total_trades", 0)
+    current_capital = stats.get("current_capital", 0)
 
     # P&L color
-    pnl_color = "green" if total_pnl >= 0 else "red"
 
     cols = st.columns(5)
     with cols[0]:
@@ -233,28 +236,16 @@ def render_stats_cards(stats: dict):
             label="Total P&L",
             value=format_currency(total_pnl),
             delta=f"{total_return:.2f}%",
-            delta_color="normal" if total_return >= 0 else "inverse"
+            delta_color="normal" if total_return >= 0 else "inverse",
         )
     with cols[1]:
-        st.metric(
-            label="Capital",
-            value=format_currency(current_capital)
-        )
+        st.metric(label="Capital", value=format_currency(current_capital))
     with cols[2]:
-        st.metric(
-            label="Win Rate",
-            value=f"{win_rate:.1f}%"
-        )
+        st.metric(label="Win Rate", value=f"{win_rate:.1f}%")
     with cols[3]:
-        st.metric(
-            label="Total Trades",
-            value=total_trades
-        )
+        st.metric(label="Total Trades", value=total_trades)
     with cols[4]:
-        st.metric(
-            label="Daily Trades",
-            value=stats.get('daily_trades', 0)
-        )
+        st.metric(label="Daily Trades", value=stats.get("daily_trades", 0))
 
 
 def render_positions(positions: List[dict], client: BotAPIClient):
@@ -266,8 +257,8 @@ def render_positions(positions: List[dict], client: BotAPIClient):
     st.subheader(f"Open Positions ({len(positions)})")
 
     for i, pos in enumerate(positions):
-        side = pos['side']
-        pnl = pos.get('unrealized_pnl', 0)
+        side = pos["side"]
+        pnl = pos.get("unrealized_pnl", 0)
         pnl_color = "🟢" if pnl >= 0 else "🔴"
 
         with st.expander(
@@ -312,52 +303,60 @@ def render_trades(trades: List[dict]):
 
     # Convert to DataFrame for display
     df = pd.DataFrame(trades)
-    df['exit_time'] = pd.to_datetime(df['exit_time'])
-    df = df.sort_values('exit_time', ascending=False)
+    df["exit_time"] = pd.to_datetime(df["exit_time"])
+    df = df.sort_values("exit_time", ascending=False)
 
     # Add styling
     def style_pnl(val):
-        color = 'green' if val >= 0 else 'red'
-        return f'color: {color}'
+        color = "green" if val >= 0 else "red"
+        return f"color: {color}"
 
     # Format for display
     display_df = df.copy()
-    display_df['pnl'] = display_df['pnl'].apply(lambda x: f"${x:.2f}")
-    display_df['entry_price'] = display_df['entry_price'].apply(lambda x: f"${x:.4f}")
-    display_df['exit_price'] = display_df['exit_price'].apply(lambda x: f"${x:.4f}" if pd.notna(x) else "-")
-    display_df = display_df.rename(columns={
-        'side': 'Side',
-        'entry_price': 'Entry',
-        'exit_price': 'Exit',
-        'quantity': 'Qty',
-        'pnl': 'P&L',
-        'exit_time': 'Exit Time'
-    })
+    display_df["pnl"] = display_df["pnl"].apply(lambda x: f"${x:.2f}")
+    display_df["entry_price"] = display_df["entry_price"].apply(lambda x: f"${x:.4f}")
+    display_df["exit_price"] = display_df["exit_price"].apply(
+        lambda x: f"${x:.4f}" if pd.notna(x) else "-"
+    )
+    display_df = display_df.rename(
+        columns={
+            "side": "Side",
+            "entry_price": "Entry",
+            "exit_price": "Exit",
+            "quantity": "Qty",
+            "pnl": "P&L",
+            "exit_time": "Exit Time",
+        }
+    )
 
     st.dataframe(
-        display_df[['Side', 'Entry', 'Exit', 'Qty', 'P&L', 'Exit Time']],
-        width='stretch',
-        hide_index=True
+        display_df[["Side", "Entry", "Exit", "Qty", "P&L", "Exit Time"]],
+        width="stretch",
+        hide_index=True,
     )
 
 
 def render_circuit_breaker(cb_status: dict, client: BotAPIClient):
     """Render circuit breaker status and controls"""
-    is_triggered = cb_status.get('is_triggered', False)
-    consecutive = cb_status.get('consecutive_losses', 0)
-    max_consecutive = cb_status.get('max_consecutive_losses', 3)
-    enabled = cb_status.get('enabled', True)
+    is_triggered = cb_status.get("is_triggered", False)
+    consecutive = cb_status.get("consecutive_losses", 0)
+    max_consecutive = cb_status.get("max_consecutive_losses", 3)
+    enabled = cb_status.get("enabled", True)
 
     if not enabled:
         return
 
     if is_triggered:
-        st.error(f"⛔ Circuit Breaker TRIGGERED! ({consecutive}/{max_consecutive} consecutive losses)")
-        cooldown_until = cb_status.get('cooldown_until')
+        st.error(
+            f"⛔ Circuit Breaker TRIGGERED! ({consecutive}/{max_consecutive} consecutive losses)"
+        )
+        cooldown_until = cb_status.get("cooldown_until")
         if cooldown_until:
             st.caption(f"Cooldown until: {cooldown_until}")
     else:
-        st.success(f"✅ Circuit Breaker OK ({consecutive}/{max_consecutive} consecutive losses)")
+        st.success(
+            f"✅ Circuit Breaker OK ({consecutive}/{max_consecutive} consecutive losses)"
+        )
 
     col1, col2 = st.columns(2)
     with col1:
@@ -371,7 +370,7 @@ def render_circuit_breaker(cb_status: dict, client: BotAPIClient):
 
 def render_controls(client: BotAPIClient, status: dict):
     """Render bot control buttons"""
-    is_paused = status.get('is_paused', False)
+    is_paused = status.get("is_paused", False)
 
     st.subheader("Bot Controls")
 
@@ -424,16 +423,22 @@ def render_manual_trade(client: BotAPIClient):
             side = st.selectbox("Side", ["LONG", "SHORT"])
 
         with col2:
-            quantity = st.number_input("Quantity (USD)", min_value=10.0, value=100.0, step=10.0)
+            quantity = st.number_input(
+                "Quantity (USD)", min_value=10.0, value=100.0, step=10.0
+            )
 
         with col3:
-            price = st.number_input("Price (optional)", min_value=0.0, value=0.0, step=0.0001)
+            price = st.number_input(
+                "Price (optional)", min_value=0.0, value=0.0, step=0.0001
+            )
 
         with col4:
             st.write("")
             if st.button("Place Trade"):
                 if quantity > 0:
-                    result = client.manual_trade(side, quantity, price if price > 0 else None)
+                    result = client.manual_trade(
+                        side, quantity, price if price > 0 else None
+                    )
                     if result and result.get("status") == "success":
                         st.success(f"{side} trade placed for ${quantity}")
                     else:
@@ -468,11 +473,12 @@ def main():
         page_title="HYPE Trading Bot Dashboard",
         page_icon="📈",
         layout="wide",
-        initial_sidebar_state="collapsed"
+        initial_sidebar_state="collapsed",
     )
 
     # Custom CSS for dark theme
-    st.markdown("""
+    st.markdown(
+        """
         <style>
         .stApp {
             background-color: #0e1117;
@@ -483,7 +489,9 @@ def main():
             border-radius: 0.5rem;
         }
         </style>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
     # Initialize API client
     client = BotAPIClient()
@@ -528,10 +536,16 @@ def main():
         chart_key = int(time.time() * 1000)
 
         with col1:
-            st.plotly_chart(create_pnl_chart(trades), width='stretch', key=f"pnl_chart_{chart_key}")
+            st.plotly_chart(
+                create_pnl_chart(trades), width="stretch", key=f"pnl_chart_{chart_key}"
+            )
 
         with col2:
-            st.plotly_chart(create_win_rate_chart(stats), width='stretch', key=f"winrate_chart_{chart_key}")
+            st.plotly_chart(
+                create_win_rate_chart(stats),
+                width="stretch",
+                key=f"winrate_chart_{chart_key}",
+            )
 
         st.markdown("---")
 

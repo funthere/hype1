@@ -42,7 +42,7 @@ class TestPosition:
             tp_price=105.0,
             sl_price=98.0,
             entry_time=datetime.now(),
-            leverage=5
+            leverage=5,
         )
 
         assert position.side == Side.LONG
@@ -69,7 +69,7 @@ class TestPosition:
             oid=12345,
             cloid="test_cloid",
             status=OrderStatus.FILLED,
-            unrealized_pnl=50.0
+            unrealized_pnl=50.0,
         )
 
         assert position.oid == 12345
@@ -91,7 +91,7 @@ class TestTrade:
             entry_time=datetime.now() - __import__("datetime").timedelta(hours=1),
             exit_time=datetime.now(),
             pnl=50.0,
-            fees=2.0
+            fees=2.0,
         )
 
         assert trade.side == Side.LONG
@@ -113,7 +113,7 @@ class TestTrade:
             exit_time=datetime.now(),
             pnl=50.0,
             fees=2.0,
-            notes="Good trade setup"
+            notes="Good trade setup",
         )
 
         assert trade.notes == "Good trade setup"
@@ -142,7 +142,10 @@ class TestBotConfig:
         config = BotConfig()
         config.USE_TESTNET = False
 
-        assert "mainnet" in config.API_URL.lower() or "hyperliquid" in config.API_URL.lower()
+        assert (
+            "mainnet" in config.API_URL.lower()
+            or "hyperliquid" in config.API_URL.lower()
+        )
         assert "testnet" not in config.API_URL.lower()
 
     def test_api_url_testnet(self):
@@ -213,7 +216,6 @@ class TestBotConfig:
 
     def test_from_env(self, monkeypatch):
         """Test configuration from environment variables"""
-        import os
 
         monkeypatch.setenv("USE_TESTNET", "true")
         monkeypatch.setenv("LEVERAGE", "10")
@@ -233,7 +235,6 @@ class TestBotConfig:
 
     def test_from_env_boolean_parsing(self, monkeypatch):
         """Test boolean parsing from environment"""
-        import os
 
         test_cases = [
             ("true", True),

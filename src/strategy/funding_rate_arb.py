@@ -15,7 +15,7 @@ import asyncio
 import logging
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -32,12 +32,14 @@ logger = logging.getLogger(__name__)
 
 class PositionSide(Enum):
     """Position direction for funding-rate arbitrage."""
+
     LONG = "LONG"
     SHORT = "SHORT"
 
 
 class PositionStatus(Enum):
     """Lifecycle status of a funding arb position."""
+
     OPEN = "open"
     CLOSED = "closed"
 
@@ -63,20 +65,20 @@ class FundingArbConfig:
     PAPER_CAPITAL: float = 10_000.0
 
     # Strategy thresholds (per 8h funding period)
-    ENTRY_THRESHOLD: float = 0.0003       # 0.03 %
-    EXIT_THRESHOLD: float = 0.0001        # 0.01 %
+    ENTRY_THRESHOLD: float = 0.0003  # 0.03 %
+    EXIT_THRESHOLD: float = 0.0001  # 0.01 %
 
     # Position sizing
-    POSITION_SIZE_PCT: float = 0.10       # 10 % of account per trade
+    POSITION_SIZE_PCT: float = 0.10  # 10 % of account per trade
     LEVERAGE: int = 3
 
     # Limits
     MAX_CONCURRENT_POSITIONS: int = 3
     MAX_HOLD_HOURS: float = 72.0
-    MAX_LOSS_PCT: float = 0.05            # 5 % emergency stop
+    MAX_LOSS_PCT: float = 0.05  # 5 % emergency stop
 
     # Scan interval
-    CHECK_INTERVAL: int = 300             # seconds (5 min)
+    CHECK_INTERVAL: int = 300  # seconds (5 min)
 
     # Asset filter (empty list ⇒ scan ALL perps)
     COINS: Optional[List[str]] = None
@@ -113,14 +115,15 @@ class FundingArbConfig:
 @dataclass
 class FundingPosition:
     """Tracks a single funding-rate arbitrage position."""
+
     id: str
     coin: str
     side: PositionSide
-    entry_rate: float          # funding rate at entry
-    entry_price: float         # mark price at entry
-    quantity: float            # position size in base asset
-    notional: float            # entry_price * quantity
-    entry_time: float          # unix timestamp
+    entry_rate: float  # funding rate at entry
+    entry_price: float  # mark price at entry
+    quantity: float  # position size in base asset
+    notional: float  # entry_price * quantity
+    entry_time: float  # unix timestamp
     total_funding_collected: float = 0.0
     last_funding_time: float = 0.0
     status: PositionStatus = PositionStatus.OPEN
@@ -145,8 +148,8 @@ class FundingRateArbStrategy:
     def __init__(
         self,
         config: FundingArbConfig,
-        api: Any,       # HyperliquidAPI (or paper shim) – duck-typed
-        db: Any,        # DatabaseManager – duck-typed
+        api: Any,  # HyperliquidAPI (or paper shim) – duck-typed
+        db: Any,  # DatabaseManager – duck-typed
     ) -> None:
         self.config = config
         self.api = api
@@ -193,9 +196,17 @@ class FundingRateArbStrategy:
 
                 coin = universe[idx].get("name", f"UNKNOWN_{idx}")
 
-                # Apply coin filter
-                if self.config.COINS and coin not in self.config.COINS:
-                    continue
+                # Apply coin filter (case-insensitive, supports prefix match e.g. kPEPE)
+                if self.config.COINS:
+                    coin_upper = coin.upper()
+                    coins_upper = [c.upper() for c in self.config.COINS]
+                    # Match exact or suffix (kPEPE matches PEPE)
+                    if not any(
+                        coin_upper == cu or coin_upper.endswith(cu)
+                        for cu in coins_upper
+                        if cu
+                    ):
+                        continue
 
                 funding_str = ctx.get("funding", "0")
                 mark_px_str = ctx.get("markPx")
@@ -214,18 +225,18 @@ class FundingRateArbStrategy:
                 if mark_px <= 0:
                     continue
 
-                opportunities.append({
-                    "coin": coin,
-                    "funding_rate": funding_rate,
-                    "mark_px": mark_px,
-                    "mid_px": mid_px,
-                    "open_interest": open_interest,
-                })
+                opportunities.append(
+                    {
+                        "coin": coin,
+                        "funding_rate": funding_rate,
+                        "mark_px": mark_px,
+                        "mid_px": mid_px,
+                        "open_interest": open_interest,
+                    }
+                )
 
             self._last_scan_time = time.time()
-            logger.debug(
-                "Scanned funding rates for %d assets", len(opportunities)
-            )
+            logger.debug("Scanned funding rates for %d assets", len(opportunities))
             return opportunities
 
         except Exception as exc:
@@ -253,8 +264,7 @@ class FundingRateArbStrategy:
         try:
             # Check max concurrent positions
             open_count = sum(
-                1 for p in self._positions.values()
-                if p.status == PositionStatus.OPEN
+                1 for p in self._positions.values() if p.status == PositionStatus.OPEN
             )
             if open_count >= self.config.MAX_CONCURRENT_POSITIONS:
                 logger.info(
@@ -293,7 +303,13 @@ class FundingRateArbStrategy:
                 self._paper_capital -= fee
                 logger.info(
                     "[PAPER] OPEN %s %s | side=%s qty=%.4f px=%.2f rate=%.6f fee=%.4f",
-                    position_id, coin, side.value, quantity, mark_px, rate, fee,
+                    position_id,
+                    coin,
+                    side.value,
+                    quantity,
+                    mark_px,
+                    rate,
+                    fee,
                 )
             else:
                 # Live order via API
@@ -307,7 +323,12 @@ class FundingRateArbStrategy:
                     return None
                 logger.info(
                     "[LIVE] OPEN %s %s | side=%s qty=%.4f px=%.2f rate=%.6f",
-                    position_id, coin, side.value, quantity, mark_px, rate,
+                    position_id,
+                    coin,
+                    side.value,
+                    quantity,
+                    mark_px,
+                    rate,
                 )
 
             pos = FundingPosition(
@@ -364,9 +385,7 @@ class FundingRateArbStrategy:
         try:
             pos = self._positions.get(position_id)
             if pos is None or pos.status == PositionStatus.CLOSED:
-                logger.warning(
-                    "Position %s not found or already closed", position_id
-                )
+                logger.warning("Position %s not found or already closed", position_id)
                 return False
 
             # Resolve close price
@@ -399,7 +418,8 @@ class FundingRateArbStrategy:
                 )
             else:
                 close_side = (
-                    PositionSide.LONG if pos.side == PositionSide.SHORT
+                    PositionSide.LONG
+                    if pos.side == PositionSide.SHORT
                     else PositionSide.SHORT
                 )
                 result = await self.api.place_order(
@@ -413,7 +433,10 @@ class FundingRateArbStrategy:
                     return False
                 logger.info(
                     "[LIVE] CLOSE %s %s | reason=%s pnl=%.4f",
-                    position_id, pos.coin, reason, realized_pnl,
+                    position_id,
+                    pos.coin,
+                    reason,
+                    realized_pnl,
                 )
 
             # Update position record
@@ -461,8 +484,7 @@ class FundingRateArbStrategy:
           3. Emergency max-loss stop.
         """
         open_positions = [
-            p for p in self._positions.values()
-            if p.status == PositionStatus.OPEN
+            p for p in self._positions.values() if p.status == PositionStatus.OPEN
         ]
         if not open_positions:
             return
@@ -516,9 +538,7 @@ class FundingRateArbStrategy:
             await self._accumulate_funding(pos, current_rate, now)
 
             if should_close:
-                logger.info(
-                    "Closing %s %s: %s", pos.id, pos.coin, reason
-                )
+                logger.info("Closing %s %s: %s", pos.id, pos.coin, reason)
                 await self.close_position(pos.id, reason, current_price)
 
     async def run_cycle(self) -> None:
@@ -586,30 +606,24 @@ class FundingRateArbStrategy:
             Dict with keys: ``cycle``, ``capital``, ``positions``, ``summary``.
         """
         open_positions = [
-            p for p in self._positions.values()
-            if p.status == PositionStatus.OPEN
+            p for p in self._positions.values() if p.status == PositionStatus.OPEN
         ]
         closed_positions = [
-            p for p in self._positions.values()
-            if p.status == PositionStatus.CLOSED
+            p for p in self._positions.values() if p.status == PositionStatus.CLOSED
         ]
 
         total_pnl = sum(p.realized_pnl for p in closed_positions)
-        total_funding = sum(
-            p.total_funding_collected for p in self._positions.values()
-        )
+        total_funding = sum(p.total_funding_collected for p in self._positions.values())
 
-        capital = (
-            self._paper_capital
-            if self.config.PAPER_TRADING
-            else None
-        )
+        capital = self._paper_capital if self.config.PAPER_TRADING else None
 
         return {
             "cycle": self._cycle_count,
             "last_scan": datetime.fromtimestamp(
                 self._last_scan_time, tz=timezone.utc
-            ).isoformat() if self._last_scan_time else None,
+            ).isoformat()
+            if self._last_scan_time
+            else None,
             "capital": capital,
             "paper_trading": self.config.PAPER_TRADING,
             "positions": {
