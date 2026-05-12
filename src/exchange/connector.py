@@ -300,3 +300,102 @@ class HyperliquidAPI:
     def last_error(self) -> Optional[str]:
         """Get last connection error"""
         return self._last_error
+
+    # ------------------------------------------------------------------ 
+    # Spot market methods (for funding arb delta-neutral hedge)
+    # ------------------------------------------------------------------ 
+
+    async def place_spot_order(
+        self,
+        coin: str,
+        is_buy: bool,
+        price: float,
+        quantity: float,
+        order_type: str = "ioc",
+    ) -> Dict:
+        """Place a spot order on HyperLiquid.
+
+        HyperLiquid spot assets are prefixed with '@' internally (e.g. '@BTC').
+        Uses the same exchange.order() with coin='<ASSET>' for perp-converted
+        spot or the raw spot token name.
+
+        Args:
+            coin: Spot coin name (e.g. 'BTC', 'ETH', 'HYPE')
+            is_buy: True to buy, False to sell
+            price: Limit price
+            quantity: Size in base asset
+            order_type: "ioc" (default for immediate fill) or "limit" (GTC)
+
+        Returns:
+            Dict with order result
+        """
+        try:
+            # Build order type
+            if order_type == "ioc":
+                hl_order_type = {"limit": {"tif": "Ioc"}}
+            elif order_type == "post_only":
+                hl_order_type = {"limit": {"tif": "Alo"}}
+            else:
+                hl_order_type = {"limit": {"tif": "Gtc"}}
+
+            # HyperLiquid uses the coin name directly for perp-spot
+            # (the SDK handles the internal naming)
+            order_result = await asyncio.to_thread(
+                self.exchange.order,
+                coin=coin,
+                is_buy=is_buy,
+                sz=quantity,
+                limit_px=price,
+                order_type=hl_order_type,
+            )
+
+            if order_result.get("status") == "ok":
+                return {
+                    "status": "ok",
+                    "response": order_result.get("response", {}),
+                }
+            else:
+                error_msg = order_result.get("response", {}).get(
+                    "error", "Unknown error"
+                )
+                logger.error(f"Spot order failed for {coin}: {error_msg}")
+                return {"status": "error", "msg": error_msg}
+
+        except Exception as e:
+            logger.error(f"Spot order exception for {coin}: {e}")
+            return {"status": "error", "msg": str(e)}
+
+    async def get_spot_balance(self, coin: str) -> float:
+        """Get spot token balance for a given coin.
+
+        Returns:
+            Balance as float, 0.0 if not found.
+        """
+        try:
+            user_state = await asyncio.to_thread(self.info.user_state, self.address)
+            # Spot balances are in 'balances' array
+            balances = user_state.get("balances", [])
+            for b in balances:
+                if b.get("coin", "").upper() == coin.upper():
+                    return float(b.get("total", 0))
+            return 0.0
+        except Exception as e:
+            logger.error(f"Failed to get spot balance for {coin}: {e}")
+            return 0.0
+
+    async def get_spot_mid_price(self, coin: str) -> Optional[float]:
+        """Get mid price for a spot market.
+
+        Uses all_mids which returns both perp and spot prices.
+        """
+        try:
+            mids = await asyncio.to_thread(self.info.all_mids)
+            # Spot mids may be under the same key or '@COIN' format
+            for key in [coin, f"@{coin}", coin.upper()]:
+                val = mids.get(key)
+                if val:
+                    return float(val)
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get spot mid for {coin}: {e}")
+            return None
