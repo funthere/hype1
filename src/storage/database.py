@@ -133,6 +133,29 @@ class DatabaseManager:
         """
         )
 
+        # Bot state table (single-row persistence for graceful shutdown/restore)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bot_state (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                current_capital REAL DEFAULT 0,
+                peak_equity REAL DEFAULT 0,
+                max_drawdown_pct REAL DEFAULT 0,
+                daily_pnl REAL DEFAULT 0,
+                daily_trades INTEGER DEFAULT 0,
+                consecutive_losses INTEGER DEFAULT 0,
+                circuit_breaker_triggered INTEGER DEFAULT 0,
+                circuit_breaker_until TEXT,
+                last_trade_date TEXT,
+                last_signal_time TEXT,
+                emergency_stop INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                CHECK (id = 1)
+            )
+            """
+        )
+
         # Create indexes
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time)"
@@ -370,6 +393,85 @@ class DatabaseManager:
 
         self.conn.commit()
         return cursor.rowcount > 0
+
+    # Bot state persistence for graceful shutdown/restore
+
+    def save_bot_state(
+        self,
+        current_capital: float,
+        peak_equity: float,
+        max_drawdown_pct: float,
+        daily_pnl: float,
+        daily_trades: int,
+        consecutive_losses: int,
+        circuit_breaker_triggered: bool,
+        circuit_breaker_until: Optional[str] = None,
+        last_trade_date: Optional[str] = None,
+        last_signal_time: Optional[str] = None,
+        emergency_stop: bool = False,
+    ) -> int:
+        """Persist bot runtime state so it can be restored after a restart.
+
+        Uses a single-row upsert (key = id = 1).
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT id FROM bot_state WHERE id = 1")
+        exists = cursor.fetchone()
+
+        row = (
+            current_capital,
+            peak_equity,
+            max_drawdown_pct,
+            daily_pnl,
+            daily_trades,
+            consecutive_losses,
+            int(circuit_breaker_triggered),
+            circuit_breaker_until,
+            last_trade_date,
+            last_signal_time,
+            int(emergency_stop),
+        )
+
+        if exists:
+            cursor.execute(
+                """
+                UPDATE bot_state SET
+                    current_capital=?, peak_equity=?, max_drawdown_pct=?,
+                    daily_pnl=?, daily_trades=?, consecutive_losses=?,
+                    circuit_breaker_triggered=?, circuit_breaker_until=?,
+                    last_trade_date=?, last_signal_time=?, emergency_stop=?,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=1
+                """,
+                row,
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO bot_state (
+                    id, current_capital, peak_equity, max_drawdown_pct,
+                    daily_pnl, daily_trades, consecutive_losses,
+                    circuit_breaker_triggered, circuit_breaker_until,
+                    last_trade_date, last_signal_time, emergency_stop
+                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                row,
+            )
+        self.conn.commit()
+        return cursor.lastrowid or 1
+
+    def load_bot_state(self) -> Optional[Dict]:
+        """Load the last saved bot state. Returns None if no state exists."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM bot_state WHERE id = 1")
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        d = self._row_to_dict(row)
+        # Normalise booleans
+        d["circuit_breaker_triggered"] = bool(d.get("circuit_breaker_triggered", 0))
+        d["emergency_stop"] = bool(d.get("emergency_stop", 0))
+        return d
 
     # Daily summary operations
 

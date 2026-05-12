@@ -99,7 +99,7 @@ class TradingBot:
         self._setup_signal_handlers()
 
     def _setup_signal_handlers(self):
-        """Setup signal handlers for external control"""
+        """Setup signal handlers for external control and graceful shutdown"""
         try:
             signal.signal(signal.SIGUSR1, self._handle_force_close_signal)
             logger.info("Signal handler: SIGUSR1 = force close all positions")
@@ -111,6 +111,25 @@ class TradingBot:
             logger.info("Signal handler: SIGUSR2 = reset circuit breaker")
         except Exception as e:
             logger.warning(f"Could not setup SIGUSR2 handler: {e}")
+
+        # Graceful shutdown on SIGTERM / SIGINT
+        try:
+            signal.signal(signal.SIGTERM, self._handle_graceful_shutdown)
+            logger.info("Signal handler: SIGTERM = graceful shutdown")
+        except Exception as e:
+            logger.warning(f"Could not setup SIGTERM handler: {e}")
+
+        try:
+            signal.signal(signal.SIGINT, self._handle_graceful_shutdown)
+            logger.info("Signal handler: SIGINT = graceful shutdown")
+        except Exception as e:
+            logger.warning(f"Could not setup SIGINT handler: {e}")
+
+    def _handle_graceful_shutdown(self, signum, frame):
+        """Handle SIGTERM/SIGINT — set flag for graceful shutdown in main loop."""
+        sig_name = signal.Signals(signum).name
+        logger.info(f"🛑 {sig_name} received — initiating graceful shutdown...")
+        self.emergency_stop = True
 
     def _handle_force_close_signal(self, signum, frame):
         """Handle SIGUSR1 - force close all positions"""
@@ -165,6 +184,9 @@ class TradingBot:
         logger.info("HYPE TRADING BOT STARTING")
         logger.info("=" * 60)
 
+        # Restore previous state from database
+        self._restore_state()
+
         # Send startup notification
         if self.telegram:
             await self.telegram.notify_start(self.config)
@@ -205,6 +227,8 @@ class TradingBot:
     async def _main_loop(self):
         """Main trading loop"""
         logger.info("Starting main trading loop...")
+        _last_persist = datetime.now()
+        _persist_interval = timedelta(minutes=5)
 
         while not self.emergency_stop:
             try:
@@ -238,6 +262,12 @@ class TradingBot:
                     if signal:
                         await self._process_signal(signal)
 
+                # Periodic state persistence (every 5 minutes)
+                now = datetime.now()
+                if now - _last_persist >= _persist_interval:
+                    self._persist_state()
+                    _last_persist = now
+
                 # Sleep before next iteration
                 await asyncio.sleep(1)
 
@@ -246,6 +276,9 @@ class TradingBot:
                 if self.telegram:
                     await self.telegram.notify_error(str(e), "main_loop")
                 await asyncio.sleep(5)
+
+        # Main loop exited — perform graceful shutdown
+        await self._shutdown("Main loop exited")
 
     async def _on_candle_update(self, candle: Dict):
         """Handle candle update from WebSocket"""
@@ -938,7 +971,10 @@ class TradingBot:
         """Shutdown the bot"""
         logger.info(f"Shutting down: {reason}")
 
-        # Close all positions
+        # Persist state before closing anything
+        self._persist_state()
+
+        # Close all positions (paper: force close, live: cancel + close)
         await self.force_close_all_positions("SHUTDOWN")
 
         # Cancel all orders
@@ -957,6 +993,120 @@ class TradingBot:
             await self.telegram.close()
 
         self.is_running = False
+
+    # ------------------------------------------------------------------
+    # State persistence (graceful shutdown / restart recovery)
+    # ------------------------------------------------------------------
+
+    def _persist_state(self):
+        """Save current bot state to database for recovery after restart."""
+        try:
+            self.db.save_bot_state(
+                current_capital=self.current_capital,
+                peak_equity=self.peak_equity,
+                max_drawdown_pct=self.max_drawdown_pct,
+                daily_pnl=self.daily_pnl,
+                daily_trades=self.daily_trades,
+                consecutive_losses=self.consecutive_losses,
+                circuit_breaker_triggered=self.circuit_breaker_triggered,
+                circuit_breaker_until=(
+                    self.circuit_breaker_until.isoformat()
+                    if self.circuit_breaker_until
+                    else None
+                ),
+                last_trade_date=(
+                    self.last_trade_date.isoformat()
+                    if isinstance(self.last_trade_date, datetime)
+                    else self.last_trade_date
+                ),
+                last_signal_time=(
+                    self._last_signal_time.isoformat()
+                    if self._last_signal_time
+                    else None
+                ),
+                emergency_stop=self.emergency_stop,
+            )
+            logger.info("Bot state persisted to database")
+        except Exception as exc:
+            logger.error(f"Failed to persist bot state: {exc}")
+
+    def _restore_state(self):
+        """Restore bot state from database after restart."""
+        try:
+            state = self.db.load_bot_state()
+            if state is None:
+                logger.info("No previous bot state found — starting fresh")
+                return
+
+            self.current_capital = state.get("current_capital", self.current_capital)
+            self.peak_equity = state.get("peak_equity", self.peak_equity)
+            self.max_drawdown_pct = state.get("max_drawdown_pct", self.max_drawdown_pct)
+            self.daily_pnl = state.get("daily_pnl", self.daily_pnl)
+            self.daily_trades = state.get("daily_trades", self.daily_trades)
+            self.consecutive_losses = state.get(
+                "consecutive_losses", self.consecutive_losses
+            )
+            self.circuit_breaker_triggered = state.get(
+                "circuit_breaker_triggered", False
+            )
+
+            cb_until = state.get("circuit_breaker_until")
+            if cb_until:
+                self.circuit_breaker_until = datetime.fromisoformat(cb_until)
+
+            last_td = state.get("last_trade_date")
+            if last_td:
+                self.last_trade_date = datetime.fromisoformat(last_td)
+
+            last_st = state.get("last_signal_time")
+            if last_st:
+                self._last_signal_time = datetime.fromisoformat(last_st)
+
+            # Restore open positions
+            saved_positions = self.db.get_active_positions()
+            for pdict in saved_positions:
+                try:
+                    pos = Position(
+                        side=Side[pdict["side"]],
+                        entry_price=pdict["entry_price"],
+                        quantity=pdict["quantity"],
+                        tp_price=pdict.get("tp_price", 0),
+                        sl_price=pdict.get("sl_price", 0),
+                        entry_time=datetime.fromisoformat(pdict["entry_time"]),
+                        leverage=pdict.get("leverage", self.config.LEVERAGE),
+                        oid=pdict.get("oid"),
+                        cloid=pdict.get("cloid"),
+                        status=OrderStatus.OPEN,
+                        unrealized_pnl=pdict.get("unrealized_pnl", 0),
+                    )
+                    self.positions.append(pos)
+                except Exception as exc:
+                    logger.warning(f"Could not restore position: {exc}")
+
+            logger.info(
+                f"Restored state: capital=${self.current_capital:.2f}, "
+                f"positions={len(self.positions)}, "
+                f"daily_pnl=${self.daily_pnl:.2f}, "
+                f"consecutive_losses={self.consecutive_losses}"
+            )
+
+            # Reset daily counters if a new day
+            if self.last_trade_date:
+                today = datetime.now().date()
+                last_date = (
+                    self.last_trade_date.date()
+                    if isinstance(self.last_trade_date, datetime)
+                    else self.last_trade_date
+                )
+                if today > last_date:
+                    logger.info("New day detected — resetting daily counters")
+                    self.daily_trades = 0
+                    self.daily_pnl = 0.0
+                    self.daily_trades_list = []
+
+        except Exception as exc:
+            logger.error(f"Failed to restore bot state: {exc}")
+            logger.info("Starting with fresh state")
 
     async def stop(self):
         """Stop the trading bot"""
