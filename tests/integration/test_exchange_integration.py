@@ -406,3 +406,64 @@ class TestExchangeConnectivity:
 
                 # First call should have queried universe once
                 assert original_meta.call_count == 1
+
+
+class TestOrderTypes:
+    """Test order type parameter in place_order."""
+
+    @pytest.fixture
+    def api_with_mock(self):
+        """Create API with mocked exchange for order type tests."""
+        config = BotConfig()
+        config.PAPER_TRADING = False
+        config.USE_TESTNET = True
+        config.ASSET = "HYPE"
+        config.PRIVATE_KEY = "0x" + "1" * 64
+
+        with patch("src.exchange.connector.Exchange") as mock_exchange:
+            with patch("src.exchange.connector.Info") as mock_info:
+                with patch("src.exchange.connector.Account"):
+                    mock_info.return_value = Mock()
+                    mock_info.return_value.meta = Mock(
+                        return_value={"universe": [{"name": "HYPE"}]}
+                    )
+                    mock_exchange_instance = Mock()
+                    mock_exchange_instance.order = Mock(
+                        return_value={"status": "ok", "response": {"oid": 123}}
+                    )
+                    mock_exchange.return_value = mock_exchange_instance
+                    api = HyperliquidAPI(config)
+                    yield api, mock_exchange_instance
+
+    @pytest.mark.asyncio
+    async def test_place_order_post_only(self, api_with_mock):
+        """Test post-only order (Alo tif)"""
+        api, exchange = api_with_mock
+        result = await api.place_order(
+            side=Side.LONG, price=100.0, quantity=10.0, order_type="post_only"
+        )
+        assert result["status"] == "ok"
+        call_kwargs = exchange.order.call_args[1]
+        assert call_kwargs["order_type"] == {"limit": {"tif": "Alo"}}
+
+    @pytest.mark.asyncio
+    async def test_place_order_ioc(self, api_with_mock):
+        """Test IOC order"""
+        api, exchange = api_with_mock
+        result = await api.place_order(
+            side=Side.SHORT, price=105.0, quantity=5.0, order_type="ioc"
+        )
+        assert result["status"] == "ok"
+        call_kwargs = exchange.order.call_args[1]
+        assert call_kwargs["order_type"] == {"limit": {"tif": "Ioc"}}
+
+    @pytest.mark.asyncio
+    async def test_place_order_default_gtc(self, api_with_mock):
+        """Test default order type is GTC"""
+        api, exchange = api_with_mock
+        result = await api.place_order(
+            side=Side.LONG, price=100.0, quantity=10.0
+        )
+        assert result["status"] == "ok"
+        call_kwargs = exchange.order.call_args[1]
+        assert call_kwargs["order_type"] == {"limit": {"tif": "Gtc"}}

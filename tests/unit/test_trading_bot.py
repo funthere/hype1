@@ -483,7 +483,8 @@ class TestTradingBotClosePosition:
         assert trade.entry_price == 100.0
         assert trade.exit_price == 105.0
         expected_pnl = (105.0 - 100.0) * 10.0
-        expected_fees = 100.0 * 10.0 * bot.config.TAKER_FEE_PCT * 2
+        # Entry: maker fee (post-only), Exit: taker fee (IOC)
+        expected_fees = 100.0 * 10.0 * (bot.config.MAKER_FEE_PCT + bot.config.TAKER_FEE_PCT)
         assert trade.pnl == pytest.approx(expected_pnl - expected_fees)
         assert trade.fees == pytest.approx(expected_fees)
 

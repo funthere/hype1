@@ -337,7 +337,10 @@ class TradingBot:
         # Place order on exchange (skip for paper trading)
         if not self.config.PAPER_TRADING:
             result = await self.api.place_order(
-                side=side, price=entry_price, quantity=quantity
+                side=side,
+                price=entry_price,
+                quantity=quantity,
+                order_type="post_only",  # Maker order — earns rebate
             )
 
             if result.get("status") != "ok":
@@ -421,9 +424,11 @@ class TradingBot:
         # PnL = (exit - entry) * qty; leverage determines margin, NOT PnL
         pnl = pnl_gross
 
-        # Calculate fees - entry + exit, using taker fee for conservative estimate
+        # Calculate fees - entry (maker via post-only) + exit (taker via IOC)
         notional = position.entry_price * position.quantity
-        fees = notional * self.config.TAKER_FEE_PCT * 2  # Entry + exit
+        entry_fee = notional * self.config.MAKER_FEE_PCT  # Post-only = maker
+        exit_fee = notional * self.config.TAKER_FEE_PCT   # IOC = taker
+        fees = entry_fee + exit_fee
 
         # Net P&L
         net_pnl = pnl - fees
@@ -488,8 +493,22 @@ class TradingBot:
             self.positions.remove(position)
 
         # Close on exchange
-        if not self.config.PAPER_TRADING and position.oid:
-            await self.api.cancel_order(position.oid)
+        if not self.config.PAPER_TRADING:
+            # Cancel any remaining open entry order
+            if position.oid:
+                await self.api.cancel_order(position.oid)
+
+            # Place closing order (IOC — ensure execution)
+            close_side = Side.SHORT if position.side == Side.LONG else Side.LONG
+            close_result = await self.api.place_order(
+                side=close_side,
+                price=exit_price,
+                quantity=position.quantity,
+                reduce_only=True,
+                order_type="ioc",
+            )
+            if close_result.get("status") != "ok":
+                logger.error(f"Close order failed: {close_result.get('msg')}")
 
         # Send notification
         if self.telegram:
