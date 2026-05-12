@@ -9,7 +9,7 @@ import signal
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 
-from ..core.config import BotConfig, Side, Position, Trade
+from ..core.config import BotConfig, Side, Position, Trade, OrderStatus
 from ..core.strategy import StrategyEngine, RiskManager
 from ..core.survival_risk import SurvivalRiskManager
 from ..exchange.connector import HyperliquidAPI
@@ -82,6 +82,10 @@ class TradingBot:
         # Cached market data
         self._cached_mids: Dict[str, float] = {}
         self._mids_last_update: Optional[datetime] = None
+
+        # Position reconciliation (live mode)
+        self._last_reconciliation: Optional[datetime] = None
+        self._reconciliation_interval = timedelta(minutes=2)
 
         # Circuit breaker
         self.consecutive_losses = 0
@@ -224,6 +228,9 @@ class TradingBot:
 
                 # Check exits on open positions (always check)
                 await self._check_position_exits()
+
+                # Periodic position reconciliation with exchange (live mode only)
+                await self._maybe_reconcile_positions()
 
                 # Process new signals (only if not paused)
                 if not self._is_paused and self.market_data.current_candle:
@@ -405,6 +412,136 @@ class TradingBot:
         # Close positions
         for position, reason in positions_to_close:
             await self._close_position(position, current_price, reason)
+
+    # ------------------------------------------------------------------
+    # Position reconciliation (sync local state with exchange)
+    # ------------------------------------------------------------------
+
+    async def _maybe_reconcile_positions(self):
+        """Periodically reconcile local positions with exchange (live mode only)."""
+        if self.config.PAPER_TRADING:
+            return
+
+        now = datetime.now()
+        if (
+            self._last_reconciliation is not None
+            and now - self._last_reconciliation < self._reconciliation_interval
+        ):
+            return
+
+        self._last_reconciliation = now
+        await self._reconcile_positions()
+
+    async def _reconcile_positions(self):
+        """Compare local positions against exchange and fix drift.
+
+        Cases handled:
+        1. Position exists on exchange but NOT locally → restore from exchange
+        2. Position exists locally but NOT on exchange → mark closed
+        3. Quantity mismatch → update local quantity
+        """
+        try:
+            exchange_positions = await self.api.get_positions()
+            asset = self.config.ASSET
+
+            # Build a lookup of exchange positions for our asset
+            exchange_map: Dict[str, Dict] = {}
+            for ep in exchange_positions:
+                coin = ep.get("coin", "")
+                if coin == asset:
+                    exchange_map[ep.get("direction", "")] = ep
+
+            # Track which exchange positions were matched
+            matched_directions: List[str] = []
+
+            # --- Check local positions against exchange ---
+            stale_locals: List[Position] = []
+            for local_pos in list(self.positions):
+                direction = "Long" if local_pos.side == Side.LONG else "Short"
+                ep = exchange_map.get(direction)
+
+                if ep is None:
+                    # Position closed on exchange without us knowing
+                    logger.warning(
+                        f"⚠️ Reconciliation: {direction} position MISSING on exchange — closing locally"
+                    )
+                    stale_locals.append(local_pos)
+                    continue
+
+                matched_directions.append(direction)
+
+                # Check quantity mismatch
+                ex_qty = abs(float(ep.get("szi", 0)))
+                if ex_qty > 0 and abs(ex_qty - local_pos.quantity) > 1e-6:
+                    logger.warning(
+                        f"⚠️ Reconciliation: qty drift local={local_pos.quantity} vs exchange={ex_qty}"
+                    )
+                    local_pos.quantity = ex_qty
+
+                # Update entry price if available
+                ex_entry = float(ep.get("entryPx", 0))
+                if ex_entry > 0 and abs(ex_entry - local_pos.entry_price) > 1e-6:
+                    logger.warning(
+                        f"⚠️ Reconciliation: entry price drift local={local_pos.entry_price} vs exchange={ex_entry}"
+                    )
+                    local_pos.entry_price = ex_entry
+
+            # Close stale local positions
+            for pos in stale_locals:
+                mids = await self.api.get_mids()
+                exit_price = float(mids.get(asset, pos.entry_price))
+                await self._close_position(pos, exit_price, "RECONCILE_MISSING")
+
+            # --- Check for exchange positions not in local ---
+            for direction, ep in exchange_map.items():
+                if direction in matched_directions:
+                    continue
+
+                # Found a position on exchange we don't track
+                side = Side.LONG if direction == "Long" else Side.SHORT
+                entry_px = float(ep.get("entryPx", 0))
+                qty = abs(float(ep.get("szi", 0)))
+
+                if qty <= 0:
+                    continue
+
+                logger.warning(
+                    f"⚠️ Reconciliation: restoring untracked {direction} "
+                    f"qty={qty} @ ${entry_px:.4f} from exchange"
+                )
+                mids = await self.api.get_mids()
+                current_px = float(mids.get(asset, entry_px))
+                tp_mult = 1.03 if side == Side.LONG else 0.97
+                sl_mult = 0.97 if side == Side.LONG else 1.03
+
+                restored = Position(
+                    side=side,
+                    entry_price=entry_px,
+                    quantity=qty,
+                    tp_price=round(current_px * tp_mult, 4),
+                    sl_price=round(current_px * sl_mult, 4),
+                    entry_time=datetime.now(),  # best effort
+                    leverage=self.config.LEVERAGE,
+                    status=OrderStatus.OPEN,
+                )
+                self.positions.append(restored)
+                self.db.save_position(restored)
+                self.db.log_event(
+                    "reconciliation",
+                    f"Restored {direction} position from exchange",
+                    {"entry_price": entry_px, "quantity": qty},
+                )
+
+                if self.telegram:
+                    await self.telegram.notify_info(
+                        f"🔄 Reconciliation: restored {direction} {qty} {asset} @ ${entry_px:.4f}"
+                    )
+
+            if stale_locals or len(matched_directions) != len(exchange_map):
+                logger.info("Reconciliation complete — state synced with exchange")
+
+        except Exception as exc:
+            logger.error(f"Position reconciliation failed: {exc}")
 
     async def _close_position(self, position: Position, exit_price: float, reason: str):
         """Close a position"""

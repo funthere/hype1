@@ -69,6 +69,7 @@ def mock_all():
                             tg_instance.notify_daily_summary = AsyncMock()
                             tg_instance.notify_circuit_breaker = AsyncMock()
                             tg_instance.notify_shutdown = AsyncMock()
+                            tg_instance.notify_info = AsyncMock()
                             tg_instance.close = AsyncMock()
                             mock_tg.from_config = Mock(return_value=tg_instance)
 
@@ -990,3 +991,134 @@ class TestTradingBotShutdown:
             assert bot.telegram.notify_shutdown.called
             assert bot.db.close.called
             assert bot.telegram.close.called
+
+
+class TestPositionReconciliation:
+    """Test exchange-to-local position reconciliation."""
+
+    def test_maybe_reconcile_skips_paper_mode(self, mock_all):
+        """Paper trading should never reconcile."""
+        bot = create_bot(mocks=mock_all)
+        bot.config.PAPER_TRADING = True
+        bot._last_reconciliation = None  # never reconciled
+        # Run directly — should return immediately without calling _reconcile
+        import asyncio
+        asyncio.get_event_loop().run_until_complete(bot._maybe_reconcile_positions())
+        bot.api.get_positions.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_maybe_reconcile_respects_interval(self, mock_all):
+        """Should skip if last reconciliation was within interval."""
+        bot = create_bot(mocks=mock_all)
+        bot.config.PAPER_TRADING = False
+        bot._last_reconciliation = datetime.now()  # just reconciled
+        await bot._maybe_reconcile_positions()
+        bot.api.get_positions.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reconcile_detects_missing_exchange_position(self, mock_all):
+        """Local position not on exchange → should close it."""
+        bot = create_bot(mocks=mock_all)
+        bot.config.PAPER_TRADING = False
+        bot.config.ASSET = "HYPE"
+        bot.api.get_positions = AsyncMock(return_value=[])  # nothing on exchange
+        bot.api.get_mids = AsyncMock(return_value={"HYPE": 100.0})
+
+        pos = Position(
+            side=Side.LONG,
+            entry_price=99.0,
+            quantity=10.0,
+            tp_price=105.0,
+            sl_price=96.0,
+            entry_time=datetime.now(),
+            leverage=5,
+        )
+        bot.positions = [pos]
+
+        with patch.object(bot, "_close_position", new_callable=AsyncMock) as mock_close:
+            await bot._reconcile_positions()
+            mock_close.assert_called_once_with(pos, 100.0, "RECONCILE_MISSING")
+
+    @pytest.mark.asyncio
+    async def test_reconcile_restores_untracked_exchange_position(self, mock_all):
+        """Exchange position not tracked locally → should restore it."""
+        bot = create_bot(mocks=mock_all)
+        bot.config.PAPER_TRADING = False
+        bot.config.ASSET = "HYPE"
+        bot.api.get_positions = AsyncMock(
+            return_value=[
+                {"coin": "HYPE", "direction": "Long", "szi": "5.0", "entryPx": "42.0"}
+            ]
+        )
+        bot.api.get_mids = AsyncMock(return_value={"HYPE": 43.0})
+        bot.positions = []
+
+        await bot._reconcile_positions()
+        assert len(bot.positions) == 1
+        assert bot.positions[0].side == Side.LONG
+        assert bot.positions[0].quantity == 5.0
+        assert bot.positions[0].entry_price == 42.0
+        bot.db.save_position.assert_called()
+        bot.db.log_event.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_reconcile_fixes_quantity_drift(self, mock_all):
+        """Quantity mismatch → local updated to match exchange."""
+        bot = create_bot(mocks=mock_all)
+        bot.config.PAPER_TRADING = False
+        bot.config.ASSET = "HYPE"
+        bot.api.get_positions = AsyncMock(
+            return_value=[
+                {"coin": "HYPE", "direction": "Long", "szi": "8.0", "entryPx": "42.0"}
+            ]
+        )
+
+        pos = Position(
+            side=Side.LONG,
+            entry_price=42.0,
+            quantity=10.0,  # drift: local says 10, exchange says 8
+            tp_price=45.0,
+            sl_price=40.0,
+            entry_time=datetime.now(),
+            leverage=5,
+        )
+        bot.positions = [pos]
+
+        await bot._reconcile_positions()
+        assert pos.quantity == 8.0
+
+    @pytest.mark.asyncio
+    async def test_reconcile_no_drift_no_action(self, mock_all):
+        """Everything matches → no changes."""
+        bot = create_bot(mocks=mock_all)
+        bot.config.PAPER_TRADING = False
+        bot.config.ASSET = "HYPE"
+        bot.api.get_positions = AsyncMock(
+            return_value=[
+                {"coin": "HYPE", "direction": "Long", "szi": "10.0", "entryPx": "100.0"}
+            ]
+        )
+
+        pos = Position(
+            side=Side.LONG,
+            entry_price=100.0,
+            quantity=10.0,
+            tp_price=105.0,
+            sl_price=98.0,
+            entry_time=datetime.now(),
+            leverage=5,
+        )
+        bot.positions = [pos]
+
+        await bot._reconcile_positions()
+        assert len(bot.positions) == 1
+        assert pos.quantity == 10.0
+
+    @pytest.mark.asyncio
+    async def test_reconcile_error_handling(self, mock_all):
+        """Exchange error should not crash the bot."""
+        bot = create_bot(mocks=mock_all)
+        bot.config.PAPER_TRADING = False
+        bot.api.get_positions = AsyncMock(side_effect=Exception("API down"))
+        # Should not raise
+        await bot._reconcile_positions()
