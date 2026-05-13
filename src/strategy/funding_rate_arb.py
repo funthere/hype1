@@ -86,11 +86,22 @@ class FundingArbConfig:
     # Fees (for PnL estimation)
     TAKER_FEE_PCT: float = 0.0005
 
+    # Delta-neutral spot hedge
+    SPOT_HEDGE_ENABLED: bool = True
+    # Coins that have liquid spot markets on HyperLiquid
+    SPOT_ELIGIBLE_COINS: List[str] = None  # populated in __post_init__
+
     # Database
     DATABASE_PATH: str = "trading_bot.db"
 
     # API URLs (set at runtime)
     API_URL: str = "https://api.hyperliquid.xyz"
+
+    def __post_init__(self):
+        if self.SPOT_ELIGIBLE_COINS is None:
+            self.SPOT_ELIGIBLE_COINS = [
+                "BTC", "ETH", "SOL", "HYPE", "ARB", "AVAX", "SUI",
+            ]
 
     def validate(self) -> bool:
         """Validate configuration values."""
@@ -131,6 +142,11 @@ class FundingPosition:
     close_time: Optional[float] = None
     close_price: Optional[float] = None
     realized_pnl: float = 0.0
+    # Spot hedge fields (delta-neutral)
+    spot_hedge_enabled: bool = False
+    spot_entry_price: float = 0.0  # price paid for spot
+    spot_quantity: float = 0.0  # spot qty held
+    spot_realized_pnl: float = 0.0  # PnL from spot on close
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +358,15 @@ class FundingRateArbStrategy:
                 entry_time=time.time(),
                 last_funding_time=time.time(),
             )
+
+            # --- Delta-neutral spot hedge ---
+            if self._should_spot_hedge(coin):
+                await self._open_spot_hedge(pos, mark_px)
+            else:
+                logger.info(
+                    "No spot hedge for %s (not in SPOT_ELIGIBLE_COINS or disabled)",
+                    coin,
+                )
             self._positions[position_id] = pos
 
             # Log to database
@@ -445,6 +470,12 @@ class FundingRateArbStrategy:
             pos.close_time = time.time()
             pos.close_price = current_price
             pos.realized_pnl = realized_pnl
+
+            # --- Close spot hedge ---
+            if pos.spot_hedge_enabled and pos.spot_quantity > 0:
+                spot_pnl = await self._close_spot_hedge(pos, current_price)
+                pos.spot_realized_pnl = spot_pnl
+                realized_pnl += spot_pnl
 
             # Log to database
             if self.db:
@@ -638,6 +669,9 @@ class FundingRateArbStrategy:
                         "notional": p.notional,
                         "funding_collected": round(p.total_funding_collected, 6),
                         "hold_hours": round((time.time() - p.entry_time) / 3600, 1),
+                        "spot_hedged": p.spot_hedge_enabled,
+                        "spot_qty": p.spot_quantity,
+                        "spot_entry": p.spot_entry_price,
                     }
                     for p in open_positions
                 ],
@@ -709,3 +743,126 @@ class FundingRateArbStrategy:
         # Track last accumulation time (reset every 8h equivalent)
         if elapsed_hours >= 8.0:
             pos.last_funding_time = now
+
+    # ------------------------------------------------------------------
+    # Delta-neutral spot hedge helpers
+    # ------------------------------------------------------------------
+
+    def _should_spot_hedge(self, coin: str) -> bool:
+        """Check if a coin should have a spot hedge."""
+        if not self.config.SPOT_HEDGE_ENABLED:
+            return False
+        eligible = [c.upper() for c in (self.config.SPOT_ELIGIBLE_COINS or [])]
+        return coin.upper() in eligible
+
+    async def _open_spot_hedge(
+        self, pos: FundingPosition, mark_px: float
+    ) -> bool:
+        """Open spot hedge to make the position delta-neutral.
+
+        For SHORT perp → BUY spot (same notional).
+        For LONG perp → not needed (or could short spot, but most spot
+        markets don't support shorting on HL).
+        """
+        try:
+            # Only hedge shorts (buy spot) — LONG perp already has delta exposure
+            # in the favorable direction
+            if pos.side == PositionSide.LONG:
+                logger.info(
+                    "LONG perp for %s — no spot hedge needed (delta is favorable)",
+                    pos.coin,
+                )
+                return True
+
+            spot_qty = pos.quantity
+            spot_price = mark_px
+
+            if self.config.PAPER_TRADING:
+                fee = pos.notional * self.config.TAKER_FEE_PCT
+                self._paper_capital -= fee
+                logger.info(
+                    "[PAPER] SPOT BUY %s | qty=%.4f px=%.2f fee=%.4f",
+                    pos.coin, spot_qty, spot_price, fee,
+                )
+            else:
+                result = await self.api.place_spot_order(
+                    coin=pos.coin,
+                    is_buy=True,
+                    price=spot_price,
+                    quantity=spot_qty,
+                    order_type="ioc",
+                )
+                if result.get("status") != "ok":
+                    logger.error(
+                        "Spot hedge BUY failed for %s: %s — perp position still open!",
+                        pos.coin, result,
+                    )
+                    # Perp position is still open — not ideal but don't close it
+                    # (funding collection continues, just with delta exposure)
+                    return False
+                logger.info(
+                    "[LIVE] SPOT BUY %s | qty=%.4f px=%.2f",
+                    pos.coin, spot_qty, spot_price,
+                )
+
+            pos.spot_hedge_enabled = True
+            pos.spot_entry_price = spot_price
+            pos.spot_quantity = spot_qty
+            return True
+
+        except Exception as exc:
+            logger.error("Failed to open spot hedge for %s: %s", pos.coin, exc)
+            return False
+
+    async def _close_spot_hedge(
+        self, pos: FundingPosition, current_price: float
+    ) -> float:
+        """Close spot hedge position and return spot PnL.
+
+        Returns:
+            Realized PnL from the spot leg.
+        """
+        try:
+            if not pos.spot_hedge_enabled or pos.spot_quantity <= 0:
+                return 0.0
+
+            spot_pnl: float = 0.0
+
+            if pos.side == PositionSide.SHORT:
+                # We bought spot — sell it now
+                spot_pnl = (current_price - pos.spot_entry_price) * pos.spot_quantity
+
+                if self.config.PAPER_TRADING:
+                    fee = pos.spot_quantity * current_price * self.config.TAKER_FEE_PCT
+                    spot_pnl -= fee
+                    self._paper_capital += pos.spot_quantity * pos.spot_entry_price + spot_pnl
+                    logger.info(
+                        "[PAPER] SPOT SELL %s | qty=%.4f px=%.2f spot_pnl=%.4f",
+                        pos.coin, pos.spot_quantity, current_price, spot_pnl,
+                    )
+                else:
+                    result = await self.api.place_spot_order(
+                        coin=pos.coin,
+                        is_buy=False,
+                        price=current_price,
+                        quantity=pos.spot_quantity,
+                        order_type="ioc",
+                    )
+                    if result.get("status") != "ok":
+                        logger.error(
+                            "Spot SELL failed for %s: %s",
+                            pos.coin, result,
+                        )
+                        return 0.0
+                    logger.info(
+                        "[LIVE] SPOT SELL %s | qty=%.4f px=%.2f spot_pnl~%.4f",
+                        pos.coin, pos.spot_quantity, current_price, spot_pnl,
+                    )
+
+            # Reset hedge state
+            pos.spot_quantity = 0.0
+            return spot_pnl
+
+        except Exception as exc:
+            logger.error("Failed to close spot hedge for %s: %s", pos.coin, exc)
+            return 0.0
