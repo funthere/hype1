@@ -86,9 +86,10 @@ class HyperliquidAPI:
         quantity: float,
         reduce_only: bool = False,
         cloid: Optional[str] = None,
+        order_type: str = "limit",
     ) -> Dict:
         """
-        Place limit order on the exchange
+        Place order on the exchange.
 
         Args:
             side: Order side (LONG/SHORT)
@@ -96,6 +97,7 @@ class HyperliquidAPI:
             quantity: Order quantity in base asset
             reduce_only: Whether to reduce existing position
             cloid: Client order ID for idempotency
+            order_type: "limit" (GTC), "post_only" (Post-Only/Alon), "ioc" (IOC)
 
         Returns:
             Dict with order result
@@ -103,13 +105,21 @@ class HyperliquidAPI:
         try:
             await self.get_asset_index()
 
+            # Build order_type parameter for HyperLiquid SDK
+            if order_type == "post_only":
+                hl_order_type = {"limit": {"tif": "Alo"}}
+            elif order_type == "ioc":
+                hl_order_type = {"limit": {"tif": "Ioc"}}
+            else:
+                hl_order_type = {"limit": {"tif": "Gtc"}}
+
             order_result = await asyncio.to_thread(
                 self.exchange.order,
                 coin=self.config.ASSET,
                 is_buy=(side == Side.LONG),
                 sz=quantity,
                 limit_px=price,
-                order_type={"limit": {"tif": "Gtc"}},
+                order_type=hl_order_type,
                 reduce_only=reduce_only,
                 cloid=cloid,
             )
