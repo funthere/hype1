@@ -1185,7 +1185,7 @@ class TestGracefulShutdown:
                 bot.emergency_stop = True
             await original_sleep(0)
 
-        with patch.object(bot, "_persist_state") as mock_persist:
+        with patch.object(bot, "_persist_state"):
             with patch("asyncio.sleep", side_effect=fake_sleep):
                 # Make _last_persist old enough to trigger persist
                 bot._main_loop_code = True  # dummy

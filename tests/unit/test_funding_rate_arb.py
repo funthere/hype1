@@ -3,12 +3,10 @@ Unit tests for Funding Rate Arbitrage Strategy — spot hedge (delta-neutral)
 """
 
 import pytest
-import time
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 from src.strategy.funding_rate_arb import (
     FundingArbConfig,
-    FundingPosition,
     FundingRateArbStrategy,
     PositionSide,
     PositionStatus,
@@ -256,7 +254,7 @@ class TestClosePositionWithSpotHedge:
 class TestStatusWithSpotHedge:
     @pytest.mark.asyncio
     async def test_status_includes_spot_fields(self, strategy):
-        pid = await strategy.open_position(
+        _pid = await strategy.open_position(
             coin="SOL",
             side=PositionSide.SHORT,
             rate=0.0005,
