@@ -350,6 +350,7 @@ async def run_strategy(config: FundingArbConfig) -> None:
 
     # --- Initialise database ---
     db = DatabaseManager(config.DATABASE_PATH)
+    await db.initialize()
 
     # --- Create strategy ---
     strategy = FundingRateArbStrategy(config, api, db)
@@ -426,7 +427,7 @@ async def run_strategy(config: FundingArbConfig) -> None:
             )
         )
 
-        db.close()
+        await db.close()
         logger.info("Funding arb runner exited cleanly")
 
 

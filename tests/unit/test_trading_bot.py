@@ -56,13 +56,14 @@ def mock_all():
                             mock_rm.return_value = rm_instance
 
                             db_instance = Mock()
-                            db_instance.save_position = Mock()
-                            db_instance.save_trade = Mock()
-                            db_instance.save_daily_summary = Mock()
-                            db_instance.log_event = Mock()
-                            db_instance.close = Mock()
-                            db_instance.save_bot_state = Mock(return_value=1)
-                            db_instance.load_bot_state = Mock(return_value=None)
+                            db_instance.save_position = AsyncMock()
+                            db_instance.save_trade = AsyncMock()
+                            db_instance.save_daily_summary = AsyncMock()
+                            db_instance.log_event = AsyncMock()
+                            db_instance.close = AsyncMock()
+                            db_instance.save_bot_state = AsyncMock(return_value=1)
+                            db_instance.load_bot_state = AsyncMock(return_value=None)
+                            db_instance.get_active_positions = AsyncMock(return_value=[])
                             mock_db.return_value = db_instance
 
                             tg_instance = Mock()
@@ -1199,19 +1200,21 @@ class TestGracefulShutdown:
         bot = create_bot(mocks=mock_all)
         bot.db.save_bot_state.side_effect = Exception("DB error")
         # Should not raise
-        bot._persist_state()
+        await bot._persist_state()
 
 
 class TestStateRestore:
     """Test state restoration on startup."""
 
-    def test_restore_state_no_previous(self, mock_all):
+    @pytest.mark.asyncio
+    async def test_restore_state_no_previous(self, mock_all):
         bot = create_bot(mocks=mock_all)
         bot.db.load_bot_state.return_value = None
-        bot._restore_state()
+        await bot._restore_state()
         assert bot.current_capital == bot.starting_capital
 
-    def test_restore_state_with_previous(self, mock_all):
+    @pytest.mark.asyncio
+    async def test_restore_state_with_previous(self, mock_all):
         bot = create_bot(mocks=mock_all)
         bot.db.load_bot_state.return_value = {
             "current_capital": 9200.0,
@@ -1227,13 +1230,14 @@ class TestStateRestore:
             "emergency_stop": False,
         }
         bot.db.get_active_positions.return_value = []
-        bot._restore_state()
+        await bot._restore_state()
         assert bot.current_capital == 9200.0
         assert bot.daily_pnl == -300.0
         assert bot.consecutive_losses == 2
         assert bot.circuit_breaker_triggered is True
 
-    def test_restore_state_with_positions(self, mock_all):
+    @pytest.mark.asyncio
+    async def test_restore_state_with_positions(self, mock_all):
         bot = create_bot(mocks=mock_all)
         bot.db.load_bot_state.return_value = {
             "current_capital": 9500.0,
@@ -1259,11 +1263,12 @@ class TestStateRestore:
                 "unrealized_pnl": 50.0,
             }
         ]
-        bot._restore_state()
+        await bot._restore_state()
         assert len(bot.positions) == 1
         assert bot.positions[0].entry_price == 100.0
 
-    def test_restore_state_new_day_resets_counters(self, mock_all):
+    @pytest.mark.asyncio
+    async def test_restore_state_new_day_resets_counters(self, mock_all):
         bot = create_bot(mocks=mock_all)
         yesterday = (datetime.now() - timedelta(days=1)).isoformat()
         bot.db.load_bot_state.return_value = {
@@ -1277,13 +1282,14 @@ class TestStateRestore:
             "last_trade_date": yesterday,
         }
         bot.db.get_active_positions.return_value = []
-        bot._restore_state()
+        await bot._restore_state()
         assert bot.daily_trades == 0
         assert bot.daily_pnl == 0.0
 
-    def test_restore_state_error_handling(self, mock_all):
+    @pytest.mark.asyncio
+    async def test_restore_state_error_handling(self, mock_all):
         bot = create_bot(mocks=mock_all)
         bot.db.load_bot_state.side_effect = Exception("DB corrupt")
         # Should not raise, just log and continue with fresh state
-        bot._restore_state()
+        await bot._restore_state()
         assert bot.current_capital == bot.starting_capital

@@ -283,7 +283,7 @@ class TrendFollowingStrategy:
             self._positions[position_id] = pos
 
             if self.db:
-                self.db.log_event(
+                await self.db.log_event(
                     event_type="trend_open",
                     message=f"Opened {side.value} {coin} @ {price:.2f}",
                     event_data={
@@ -363,7 +363,7 @@ class TrendFollowingStrategy:
             pos.realized_pnl = realized_pnl
 
             if self.db:
-                self.db.log_event(
+                await self.db.log_event(
                     event_type="trend_close",
                     message=f"Closed {pos.side.value} {pos.coin} reason={reason} pnl={realized_pnl:.4f}",
                     event_data={

@@ -371,7 +371,7 @@ class FundingRateArbStrategy:
 
             # Log to database
             if self.db:
-                self.db.log_event(
+                await self.db.log_event(
                     event_type="funding_arb_open",
                     message=f"Opened {side.value} {coin} @ {mark_px:.2f} rate={rate:.6f}",
                     event_data={
@@ -479,7 +479,7 @@ class FundingRateArbStrategy:
 
             # Log to database
             if self.db:
-                self.db.log_event(
+                await self.db.log_event(
                     event_type="funding_arb_close",
                     message=(
                         f"Closed {pos.side.value} {pos.coin} "

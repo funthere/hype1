@@ -63,7 +63,7 @@ def mock_api():
 def mock_db():
     """Mock database."""
     db = Mock()
-    db.log_event = Mock()
+    db.log_event = AsyncMock()
     return db
 
 

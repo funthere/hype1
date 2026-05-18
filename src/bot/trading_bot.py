@@ -184,8 +184,9 @@ class TradingBot:
         logger.info("HYPE TRADING BOT STARTING")
         logger.info("=" * 60)
 
-        # Restore previous state from database
-        self._restore_state()
+        # Initialize database (async) and restore previous state
+        await self.db.initialize()
+        await self._restore_state()
 
         # Send startup notification
         if self.telegram:
@@ -265,7 +266,7 @@ class TradingBot:
                 # Periodic state persistence (every 5 minutes)
                 now = datetime.now()
                 if now - _last_persist >= _persist_interval:
-                    self._persist_state()
+                    await self._persist_state()
                     _last_persist = now
 
                 # Sleep before next iteration
@@ -394,8 +395,8 @@ class TradingBot:
         self.positions.append(position)
 
         # Save to database
-        self.db.save_position(position)
-        self.db.log_event("trade_entry", f"{side.value} entry", signal)
+        await self.db.save_position(position)
+        await self.db.log_event("trade_entry", f"{side.value} entry", signal)
 
         # Send notification
         if self.telegram:
@@ -561,8 +562,8 @@ class TradingBot:
                     status=OrderStatus.OPEN,
                 )
                 self.positions.append(restored)
-                self.db.save_position(restored)
-                self.db.log_event(
+                await self.db.save_position(restored)
+                await self.db.log_event(
                     "reconciliation",
                     f"Restored {direction} position from exchange",
                     {"entry_price": entry_px, "quantity": qty},
@@ -616,8 +617,8 @@ class TradingBot:
         )
 
         # Save trade to database
-        self.db.save_trade(trade)
-        self.db.log_event(
+        await self.db.save_trade(trade)
+        await self.db.log_event(
             "trade_exit", f"{position.side.value} exit ({reason})", {"pnl": net_pnl}
         )
 
@@ -713,7 +714,7 @@ class TradingBot:
                     "starting_capital": self.starting_capital,
                     "ending_capital": self.current_capital,
                 }
-                self.db.save_daily_summary(self.last_trade_date.isoformat(), summary)
+                await self.db.save_daily_summary(self.last_trade_date.isoformat(), summary)
 
                 if self.telegram:
                     await self.telegram.notify_daily_summary(summary)
@@ -793,7 +794,7 @@ class TradingBot:
                 pnl = (position.entry_price - current_price) * position.quantity
 
             position.unrealized_pnl = pnl
-            self.db.save_position(position)
+            await self.db.save_position(position)
 
     # Emergency controls
 
@@ -991,7 +992,7 @@ class TradingBot:
         logger.info(f"Shutting down: {reason}")
 
         # Persist state before closing anything
-        self._persist_state()
+        await self._persist_state()
 
         # Close all positions (paper: force close, live: cancel + close)
         await self.force_close_all_positions("SHUTDOWN")
@@ -1005,7 +1006,7 @@ class TradingBot:
             await self.telegram.notify_shutdown(reason)
 
         # Close database
-        self.db.close()
+        await self.db.close()
 
         # Close telegram client
         if self.telegram:
@@ -1017,10 +1018,10 @@ class TradingBot:
     # State persistence (graceful shutdown / restart recovery)
     # ------------------------------------------------------------------
 
-    def _persist_state(self):
+    async def _persist_state(self):
         """Save current bot state to database for recovery after restart."""
         try:
-            self.db.save_bot_state(
+            await self.db.save_bot_state(
                 current_capital=self.current_capital,
                 peak_equity=self.peak_equity,
                 max_drawdown_pct=self.max_drawdown_pct,
@@ -1049,10 +1050,10 @@ class TradingBot:
         except Exception as exc:
             logger.error(f"Failed to persist bot state: {exc}")
 
-    def _restore_state(self):
+    async def _restore_state(self):
         """Restore bot state from database after restart."""
         try:
-            state = self.db.load_bot_state()
+            state = await self.db.load_bot_state()
             if state is None:
                 logger.info("No previous bot state found — starting fresh")
                 return
@@ -1082,7 +1083,7 @@ class TradingBot:
                 self._last_signal_time = datetime.fromisoformat(last_st)
 
             # Restore open positions
-            saved_positions = self.db.get_active_positions()
+            saved_positions = await self.db.get_active_positions()
             for pdict in saved_positions:
                 try:
                     pos = Position(

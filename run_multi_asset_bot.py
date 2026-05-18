@@ -249,8 +249,8 @@ class MultiAssetTradingBot:
         self.positions[asset].append(position)
 
         # Save to database
-        self.db.save_position(position)
-        self.db.log_event("trade_entry", f"{asset} {signal.action.value} entry")
+        await self.db.save_position(position)
+        await self.db.log_event("trade_entry", f"{asset} {signal.action.value} entry")
 
         logger.info(
             f"Opened {asset} {signal.action.value} position @ ${signal.entry_price:.4f}, "
@@ -336,7 +336,7 @@ class MultiAssetTradingBot:
         )
 
         # Save trade
-        self.db.save_trade(trade)
+        await self.db.save_trade(trade)
 
         # Update tracking
         self.daily_trades += 1
@@ -391,7 +391,7 @@ class MultiAssetTradingBot:
                     )
 
         # Close database
-        self.db.close()
+        await self.db.close()
 
         # Close telegram
         if self.telegram:

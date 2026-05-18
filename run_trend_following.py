@@ -201,6 +201,7 @@ async def main() -> None:
 
     api = HyperliquidAPI(bot_config)
     db = DatabaseManager(config.DATABASE_PATH)
+    await db.initialize()
 
     strategy = TrendFollowingStrategy(config, api, db)
 
@@ -239,7 +240,7 @@ async def main() -> None:
         pass
 
     await strategy_task
-    db.close()
+    await db.close()
     console.print("[bold]Bot stopped.[/bold]")
 
 
