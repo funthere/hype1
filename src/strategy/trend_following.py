@@ -740,8 +740,28 @@ class TrendFollowingStrategy:
             return False
 
     @staticmethod
+    def _wilder_smooth(series: pd.Series, period: int) -> pd.Series:
+        """Apply Wilder's smoothing (EMA with alpha=1/period).
+
+        First value is the SMA of the first `period` values, then each subsequent
+        value is: prev * (period-1)/period + current / period.
+        """
+        result = np.full(len(series), np.nan)
+        if len(series) < period:
+            return pd.Series(result, index=series.index)
+
+        # Seed with SMA of first `period` values
+        result[period - 1] = series.iloc[:period].mean()
+
+        # Wilder's smoothing for the rest
+        for i in range(period, len(series)):
+            result[i] = result[i - 1] * (period - 1) / period + series.iloc[i] / period
+
+        return pd.Series(result, index=series.index)
+
+    @staticmethod
     def _calculate_atr(df: pd.DataFrame, period: int = 14) -> Optional[pd.Series]:
-        """Calculate Average True Range."""
+        """Calculate Average True Range using Wilder's smoothing."""
         try:
             high = df["high"]
             low = df["low"]
@@ -752,13 +772,13 @@ class TrendFollowingStrategy:
             tr3 = abs(low - close.shift(1))
             tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
-            return tr.rolling(window=period).mean()
+            return TrendFollowingStrategy._wilder_smooth(tr, period)
         except Exception:
             return None
 
     @staticmethod
     def _calculate_adx(df: pd.DataFrame, period: int = 14) -> Optional[pd.Series]:
-        """Calculate Average Directional Index (ADX)."""
+        """Calculate Average Directional Index (ADX) using Wilder's smoothing."""
         try:
             high = df["high"]
             low = df["low"]
@@ -774,17 +794,39 @@ class TrendFollowingStrategy:
             up_move = high - high.shift(1)
             down_move = low.shift(1) - low
 
-            plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
-            minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+            plus_dm = pd.Series(
+                np.where((up_move > down_move) & (up_move > 0), up_move, 0),
+                index=df.index,
+            )
+            minus_dm = pd.Series(
+                np.where((down_move > up_move) & (down_move > 0), down_move, 0),
+                index=df.index,
+            )
 
-            # Smoothed averages
-            atr = tr.rolling(window=period).mean()
-            plus_di = 100 * pd.Series(plus_dm).rolling(window=period).mean() / atr
-            minus_di = 100 * pd.Series(minus_dm).rolling(window=period).mean() / atr
+            # Wilder's smoothing for TR, +DM, -DM
+            smoothed_tr = TrendFollowingStrategy._wilder_smooth(tr, period)
+            smoothed_plus_dm = TrendFollowingStrategy._wilder_smooth(plus_dm, period)
+            smoothed_minus_dm = TrendFollowingStrategy._wilder_smooth(minus_dm, period)
 
-            # DX and ADX
-            dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
-            adx = dx.rolling(window=period).mean()
+            # +DI and -DI
+            plus_di = pd.Series(
+                np.where(smoothed_tr > 0, 100 * smoothed_plus_dm / smoothed_tr, 0),
+                index=df.index,
+            )
+            minus_di = pd.Series(
+                np.where(smoothed_tr > 0, 100 * smoothed_minus_dm / smoothed_tr, 0),
+                index=df.index,
+            )
+
+            # DX
+            di_sum = plus_di + minus_di
+            dx = pd.Series(
+                np.where(di_sum > 0, 100 * abs(plus_di - minus_di) / di_sum, 0),
+                index=df.index,
+            )
+
+            # ADX = Wilder's smooth of DX
+            adx = TrendFollowingStrategy._wilder_smooth(dx, period)
 
             return adx
         except Exception:
