@@ -1,5 +1,6 @@
 """Core trading bot components"""
 
+from .base_config import BaseStrategyConfig
 from .config import BotConfig, Side, OrderStatus, Position, Trade
 from .strategy import StrategyEngine, RiskManager
 from .multi_asset import (
@@ -12,6 +13,7 @@ from .multi_asset import (
 )
 
 __all__ = [
+    "BaseStrategyConfig",
     "BotConfig",
     "Side",
     "OrderStatus",

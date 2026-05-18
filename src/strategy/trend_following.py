@@ -18,11 +18,13 @@ import time
 import uuid
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 from hyperliquid.info import Info
+
+from ..core.base_config import BaseStrategyConfig
 
 logger = logging.getLogger(__name__)
 
@@ -43,20 +45,17 @@ class TrendPositionStatus(Enum):
 
 
 @dataclass
-class TrendFollowingConfig:
-    """Configuration for the Trend Following strategy."""
+class TrendFollowingConfig(BaseStrategyConfig):
+    """Configuration for the Trend Following strategy.
 
-    # Mode
+    Inherits common fields from ``BaseStrategyConfig`` and adds
+    trend-following-specific parameters.
+    """
+
+    # Override base defaults
+    LEVERAGE: int = 3
     PAPER_TRADING: bool = True
-    USE_TESTNET: bool = False
-
-    # Account
-    PRIVATE_KEY: str = ""
-    ADDRESS: str = ""
-    ACCOUNT_ADDRESS: Optional[str] = None
-
-    # Capital
-    PAPER_CAPITAL: float = 10_000.0
+    DATABASE_PATH: str = "trend_following.db"
 
     # Trend detection
     FAST_EMA_PERIOD: int = 9
@@ -73,8 +72,6 @@ class TrendFollowingConfig:
     VOLUME_MULT: float = 1.2         # Volume must be > MA * this
 
     # Position management
-    POSITION_SIZE_PCT: float = 0.10  # 10% of capital per trade
-    LEVERAGE: int = 3
     ATR_STOP_MULT: float = 2.0       # Stop loss = ATR * this
     ATR_TP_MULT: float = 4.0         # Take profit = ATR * this
     TRAILING_STOP_MULT: float = 2.5  # Trailing stop = ATR * this
@@ -83,7 +80,6 @@ class TrendFollowingConfig:
     # Limits
     MAX_CONCURRENT_POSITIONS: int = 3
     MAX_HOLD_HOURS: float = 168.0    # 7 days
-    MAX_LOSS_PCT: float = 0.05       # 5% emergency stop
 
     # Scan interval
     CHECK_INTERVAL: int = 300        # 5 minutes
@@ -92,24 +88,53 @@ class TrendFollowingConfig:
     # Asset filter
     COINS: Optional[List[str]] = None
 
-    # Fees
-    TAKER_FEE_PCT: float = 0.0005
-
-    # Database
-    DATABASE_PATH: str = "trend_following.db"
-
     # API URLs
     API_URL: str = "https://api.hyperliquid.xyz"
 
+    # Explicit env vars for TrendFollowingConfig
+    _ENV_VAR_KEYS: ClassVar[Tuple[str, ...]] = (
+        # Base keys
+        "USE_TESTNET",
+        "PAPER_TRADING",
+        "PRIVATE_KEY",
+        "ADDRESS",
+        "ACCOUNT_ADDRESS",
+        "PAPER_CAPITAL",
+        "ASSET",
+        "TIMEFRAME",
+        "LEVERAGE",
+        "RISK_PER_TRADE_PCT",
+        "POSITION_SIZE_PCT",
+        "MAX_POSITIONS",
+        "MAX_DAILY_TRADES",
+        "MAX_DAILY_LOSS_PCT",
+        "MAX_LOSS_PCT",
+        "EMERGENCY_SHUTDOWN",
+        "MAKER_FEE_PCT",
+        "TAKER_FEE_PCT",
+        "DATABASE_PATH",
+        # Trend-following-specific keys
+        "FAST_EMA_PERIOD",
+        "SLOW_EMA_PERIOD",
+        "TREND_EMA_PERIOD",
+        "ADX_PERIOD",
+        "ADX_THRESHOLD",
+        "ATR_PERIOD",
+        "ATR_STOP_MULT",
+        "ATR_TP_MULT",
+        "TRAILING_STOP_MULT",
+        "USE_TRAILING_STOP",
+        "MAX_CONCURRENT_POSITIONS",
+        "MAX_HOLD_HOURS",
+        "CHECK_INTERVAL",
+        "CANDLE_INTERVAL",
+        "API_URL",
+    )
+
     def validate(self) -> bool:
-        if self.POSITION_SIZE_PCT <= 0 or self.POSITION_SIZE_PCT > 1:
-            raise ValueError("POSITION_SIZE_PCT must be in (0, 1]")
+        super().validate()
         if self.FAST_EMA_PERIOD >= self.SLOW_EMA_PERIOD:
             raise ValueError("FAST_EMA_PERIOD must be < SLOW_EMA_PERIOD")
-        if self.LEVERAGE < 1 or self.LEVERAGE > 100:
-            raise ValueError("LEVERAGE must be in [1, 100]")
-        if not self.PAPER_TRADING and not self.PRIVATE_KEY:
-            raise ValueError("PRIVATE_KEY required for live trading")
         return True
 
 
