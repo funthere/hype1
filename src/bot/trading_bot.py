@@ -20,6 +20,10 @@ from ..analytics.adaptive import AdaptiveParameterManager
 from ..analytics.health import HealthMonitor
 from ..analytics.performance import PerformanceAnalyzer
 
+from .position_manager import PositionManager
+from .risk_guard import RiskGuard
+from .trade_executor import TradeExecutor
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,8 +52,13 @@ class TradingBot:
         self.db = DatabaseManager(config.DATABASE_PATH)
         self.telegram = TelegramNotifier.from_config(config)
 
-        # State
-        self.positions: List[Position] = []
+        # Composed sub-components
+        self.position_manager = PositionManager()
+        self.risk_guard = RiskGuard(config)
+        self.trade_executor = TradeExecutor(self.api, config)
+
+        # State — positions lives in position_manager now, but we keep
+        # self.positions as a proxy property so existing tests/code work.
         self.trades: List[Trade] = []
         self.daily_trades = 0
         self.daily_pnl = 0.0
@@ -66,8 +75,6 @@ class TradingBot:
             config.PAPER_CAPITAL if config.PAPER_TRADING else 10000.0
         )
         self.current_capital = self.starting_capital
-        self.peak_equity = self.starting_capital
-        self.max_drawdown_pct = 0.0
 
         # Signal cooldown
         self._last_signal_time: Optional[datetime] = None
@@ -79,51 +86,94 @@ class TradingBot:
         self.health_monitor = HealthMonitor()
         self.performance_analyzer = PerformanceAnalyzer(self.starting_capital)
 
-        # Cached market data
-        self._cached_mids: Dict[str, float] = {}
-        self._mids_last_update: Optional[datetime] = None
-
-        # Position reconciliation (live mode)
-        self._last_reconciliation: Optional[datetime] = None
-        self._reconciliation_interval = timedelta(minutes=2)
-
-        # Circuit breaker
-        self.consecutive_losses = 0
-        self.circuit_breaker_triggered = False
-        self.circuit_breaker_until: Optional[datetime] = None
-
         # API server (optional)
         self.api_server = None
 
         # Setup signal handlers
         self._setup_signal_handlers()
 
+    # ------------------------------------------------------------------
+    # Backward-compatible proxy for positions list
+    # ------------------------------------------------------------------
+
+    @property
+    def positions(self) -> List[Position]:
+        return self.position_manager.positions
+
+    @positions.setter
+    def positions(self, value: List[Position]):
+        self.position_manager.positions = value
+
+    # Circuit-breaker proxy delegates to risk_guard for backward compat
+    @property
+    def consecutive_losses(self) -> int:
+        return self.risk_guard.consecutive_losses
+
+    @consecutive_losses.setter
+    def consecutive_losses(self, value: int):
+        self.risk_guard.consecutive_losses = value
+
+    @property
+    def circuit_breaker_triggered(self) -> bool:
+        return self.risk_guard.circuit_breaker_triggered
+
+    @circuit_breaker_triggered.setter
+    def circuit_breaker_triggered(self, value: bool):
+        self.risk_guard.circuit_breaker_triggered = value
+
+    @property
+    def circuit_breaker_until(self):
+        return self.risk_guard.circuit_breaker_until
+
+    @circuit_breaker_until.setter
+    def circuit_breaker_until(self, value):
+        self.risk_guard.circuit_breaker_until = value
+
+    # Drawdown proxy
+    @property
+    def peak_equity(self) -> float:
+        return self.risk_guard.peak_equity
+
+    @peak_equity.setter
+    def peak_equity(self, value: float):
+        self.risk_guard.peak_equity = value
+
+    @property
+    def max_drawdown_pct(self) -> float:
+        return self.risk_guard.max_drawdown_pct
+
+    @max_drawdown_pct.setter
+    def max_drawdown_pct(self, value: float):
+        self.risk_guard.max_drawdown_pct = value
+
+    # Cached mids proxy
+    @property
+    def _cached_mids(self) -> Dict[str, float]:
+        return self.position_manager._cached_mids
+
+    @_cached_mids.setter
+    def _cached_mids(self, value: Dict[str, float]):
+        self.position_manager._cached_mids = value
+
+    @property
+    def _mids_last_update(self):
+        return self.position_manager._mids_last_update
+
+    @_mids_last_update.setter
+    def _mids_last_update(self, value):
+        self.position_manager._mids_last_update = value
+
+    @property
+    def _last_reconciliation(self):
+        return self.position_manager._last_reconciliation
+
+    @_last_reconciliation.setter
+    def _last_reconciliation(self, value):
+        self.position_manager._last_reconciliation = value
+
     def _setup_signal_handlers(self):
         """Setup signal handlers for external control and graceful shutdown"""
-        try:
-            signal.signal(signal.SIGUSR1, self._handle_force_close_signal)
-            logger.info("Signal handler: SIGUSR1 = force close all positions")
-        except Exception as e:
-            logger.warning(f"Could not setup SIGUSR1 handler: {e}")
-
-        try:
-            signal.signal(signal.SIGUSR2, self._handle_reset_circuit_breaker_signal)
-            logger.info("Signal handler: SIGUSR2 = reset circuit breaker")
-        except Exception as e:
-            logger.warning(f"Could not setup SIGUSR2 handler: {e}")
-
-        # Graceful shutdown on SIGTERM / SIGINT
-        try:
-            signal.signal(signal.SIGTERM, self._handle_graceful_shutdown)
-            logger.info("Signal handler: SIGTERM = graceful shutdown")
-        except Exception as e:
-            logger.warning(f"Could not setup SIGTERM handler: {e}")
-
-        try:
-            signal.signal(signal.SIGINT, self._handle_graceful_shutdown)
-            logger.info("Signal handler: SIGINT = graceful shutdown")
-        except Exception as e:
-            logger.warning(f"Could not setup SIGINT handler: {e}")
+        TradeExecutor.setup_signal_handlers(self)
 
     def _handle_graceful_shutdown(self, signum, frame):
         """Handle SIGTERM/SIGINT — set flag for graceful shutdown in main loop."""
@@ -160,9 +210,7 @@ class TradingBot:
 
     def reset_circuit_breaker(self) -> None:
         """Manually reset circuit breaker"""
-        self.circuit_breaker_triggered = False
-        self.circuit_breaker_until = None
-        self.consecutive_losses = 0
+        self.risk_guard.reset_circuit_breaker()
         logger.info("Circuit breaker manually reset")
 
     def update_config_param(self, name: str, value):
@@ -287,8 +335,7 @@ class TradingBot:
         current_price = float(candle.get("close", 0))
         if current_price > 0:
             self.adaptive_params.update_market_data(current_price)
-            self._cached_mids[self.config.ASSET] = current_price
-            self._mids_last_update = datetime.now()
+            self.position_manager.update_cached_price(self.config.ASSET, current_price)
         await self._update_unrealized_pnl()
 
     # Trading logic
@@ -357,65 +404,20 @@ class TradingBot:
 
     async def _place_entry_order(self, signal: Dict):
         """Place entry order based on signal"""
-        side = signal["action"]
-        entry_price = signal["entry_price"]
-        quantity = signal["quantity"]
-
-        logger.info(f"Placing {side.value} entry order @ ${entry_price:.4f}")
-
-        # Create position object
-        position = Position(
-            side=side,
-            entry_price=entry_price,
-            quantity=quantity,
-            tp_price=signal["tp_price"],
-            sl_price=signal["sl_price"],
-            entry_time=datetime.now(),
-            leverage=self.config.LEVERAGE,
+        position = await self.trade_executor.place_entry_order(
+            signal, self.db, self.telegram
         )
-
-        # Place order on exchange (skip for paper trading)
-        if not self.config.PAPER_TRADING:
-            result = await self.api.place_order(
-                side=side,
-                price=entry_price,
-                quantity=quantity,
-                order_type="post_only",  # Maker order — earns rebate
-            )
-
-            if result.get("status") != "ok":
-                logger.error(f"Entry order failed: {result.get('msg')}")
-                return
-
-            # Store order ID
-            position.oid = result.get("response", {}).get("oid")
-
-        # Add to positions
-        self.positions.append(position)
-
-        # Save to database
-        self.db.save_position(position)
-        self.db.log_event("trade_entry", f"{side.value} entry", signal)
-
-        # Send notification
-        if self.telegram:
-            await self.telegram.notify_trade_entry(signal)
+        if position is not None:
+            self.position_manager.add_position(position)
 
     async def _check_position_exits(self):
         """Check if any positions should be closed"""
         if not self.positions:
             return
 
-        # Use cached mids from WebSocket if recent (< 30s), otherwise fetch
-        if (
-            self._mids_last_update
-            and (datetime.now() - self._mids_last_update).total_seconds() < 30
-            and self.config.ASSET in self._cached_mids
-        ):
-            current_price = self._cached_mids[self.config.ASSET]
-        else:
-            mids = await self.api.get_mids()
-            current_price = float(mids.get(self.config.ASSET, 0))
+        current_price = await self.position_manager._get_current_price(
+            self.api, self.config
+        )
 
         if current_price == 0:
             return
@@ -450,134 +452,20 @@ class TradingBot:
             await self._close_position(position, current_price, reason)
 
     # ------------------------------------------------------------------
-    # Position reconciliation (sync local state with exchange)
+    # Position reconciliation (delegate to PositionManager)
     # ------------------------------------------------------------------
 
     async def _maybe_reconcile_positions(self):
-        """Periodically reconcile local positions with exchange (live mode only)."""
-        if self.config.PAPER_TRADING:
-            return
-
-        now = datetime.now()
-        if (
-            self._last_reconciliation is not None
-            and now - self._last_reconciliation < self._reconciliation_interval
-        ):
-            return
-
-        self._last_reconciliation = now
-        await self._reconcile_positions()
+        """Periodically reconcile local positions with exchange."""
+        await self.position_manager.maybe_reconcile(
+            self.api, self.config, self.db, self.telegram, self._close_position
+        )
 
     async def _reconcile_positions(self):
-        """Compare local positions against exchange and fix drift.
-
-        Cases handled:
-        1. Position exists on exchange but NOT locally → restore from exchange
-        2. Position exists locally but NOT on exchange → mark closed
-        3. Quantity mismatch → update local quantity
-        """
-        try:
-            exchange_positions = await self.api.get_positions()
-            asset = self.config.ASSET
-
-            # Build a lookup of exchange positions for our asset
-            exchange_map: Dict[str, Dict] = {}
-            for ep in exchange_positions:
-                coin = ep.get("coin", "")
-                if coin == asset:
-                    exchange_map[ep.get("direction", "")] = ep
-
-            # Track which exchange positions were matched
-            matched_directions: List[str] = []
-
-            # --- Check local positions against exchange ---
-            stale_locals: List[Position] = []
-            for local_pos in list(self.positions):
-                direction = "Long" if local_pos.side == Side.LONG else "Short"
-                ep = exchange_map.get(direction)
-
-                if ep is None:
-                    # Position closed on exchange without us knowing
-                    logger.warning(
-                        f"⚠️ Reconciliation: {direction} position MISSING on exchange — closing locally"
-                    )
-                    stale_locals.append(local_pos)
-                    continue
-
-                matched_directions.append(direction)
-
-                # Check quantity mismatch
-                ex_qty = abs(float(ep.get("szi", 0)))
-                if ex_qty > 0 and abs(ex_qty - local_pos.quantity) > 1e-6:
-                    logger.warning(
-                        f"⚠️ Reconciliation: qty drift local={local_pos.quantity} vs exchange={ex_qty}"
-                    )
-                    local_pos.quantity = ex_qty
-
-                # Update entry price if available
-                ex_entry = float(ep.get("entryPx", 0))
-                if ex_entry > 0 and abs(ex_entry - local_pos.entry_price) > 1e-6:
-                    logger.warning(
-                        f"⚠️ Reconciliation: entry price drift local={local_pos.entry_price} vs exchange={ex_entry}"
-                    )
-                    local_pos.entry_price = ex_entry
-
-            # Close stale local positions
-            for pos in stale_locals:
-                mids = await self.api.get_mids()
-                exit_price = float(mids.get(asset, pos.entry_price))
-                await self._close_position(pos, exit_price, "RECONCILE_MISSING")
-
-            # --- Check for exchange positions not in local ---
-            for direction, ep in exchange_map.items():
-                if direction in matched_directions:
-                    continue
-
-                # Found a position on exchange we don't track
-                side = Side.LONG if direction == "Long" else Side.SHORT
-                entry_px = float(ep.get("entryPx", 0))
-                qty = abs(float(ep.get("szi", 0)))
-
-                if qty <= 0:
-                    continue
-
-                logger.warning(
-                    f"⚠️ Reconciliation: restoring untracked {direction} "
-                    f"qty={qty} @ ${entry_px:.4f} from exchange"
-                )
-                mids = await self.api.get_mids()
-                current_px = float(mids.get(asset, entry_px))
-                tp_mult = 1.03 if side == Side.LONG else 0.97
-                sl_mult = 0.97 if side == Side.LONG else 1.03
-
-                restored = Position(
-                    side=side,
-                    entry_price=entry_px,
-                    quantity=qty,
-                    tp_price=round(current_px * tp_mult, 4),
-                    sl_price=round(current_px * sl_mult, 4),
-                    entry_time=datetime.now(),  # best effort
-                    leverage=self.config.LEVERAGE,
-                    status=OrderStatus.OPEN,
-                )
-                self.positions.append(restored)
-                self.db.save_position(restored)
-                self.db.log_event(
-                    "reconciliation",
-                    f"Restored {direction} position from exchange",
-                    {"entry_price": entry_px, "quantity": qty},
-                )
-
-                if self.telegram:
-                    await self.telegram.notify_info(
-                        f"🔄 Reconciliation: restored {direction} {qty} {asset} @ ${entry_px:.4f}"
-                    )
-
-            if stale_locals or len(matched_directions) != len(exchange_map):
-                logger.info("Reconciliation complete — state synced with exchange")
-
-        except Exception as exc:
-            logger.error(f"Position reconciliation failed: {exc}")
+        """Compare local positions against exchange and fix drift."""
+        await self.position_manager.reconcile_positions(
+            self.api, self.config, self.db, self.telegram, self._close_position
+        )
 
     async def _close_position(self, position: Position, exit_price: float, reason: str):
         """Close a position"""
@@ -640,45 +528,18 @@ class TradingBot:
         self.adaptive_params.record_trade(trade)
         self.performance_analyzer.add_trade(trade)
 
-        # Update consecutive losses tracking
-        if net_pnl < 0:
-            self.consecutive_losses += 1
-            if (
-                self.config.CIRCUIT_BREAKER_ENABLED
-                and self.consecutive_losses >= self.config.MAX_CONSECUTIVE_LOSSES
-            ):
-                await self._trigger_circuit_breaker()
-        else:
-            self.consecutive_losses = 0
-
-        # Update drawdown tracking
+        # Update risk guard (consecutive losses + drawdown)
+        self.risk_guard.record_trade_result(net_pnl, self.current_capital)
         self.current_capital = max(self.current_capital, 100)  # Floor at minimum
-        if self.current_capital > self.peak_equity:
-            self.peak_equity = self.current_capital
-        drawdown = (self.peak_equity - self.current_capital) / self.peak_equity
-        self.max_drawdown_pct = max(self.max_drawdown_pct, drawdown)
+
+        if self.risk_guard.should_trigger_circuit_breaker():
+            await self._trigger_circuit_breaker()
 
         # Remove from positions
-        if position in self.positions:
-            self.positions.remove(position)
+        self.position_manager.remove_position(position)
 
         # Close on exchange
-        if not self.config.PAPER_TRADING:
-            # Cancel any remaining open entry order
-            if position.oid:
-                await self.api.cancel_order(position.oid)
-
-            # Place closing order (IOC — ensure execution)
-            close_side = Side.SHORT if position.side == Side.LONG else Side.LONG
-            close_result = await self.api.place_order(
-                side=close_side,
-                price=exit_price,
-                quantity=position.quantity,
-                reduce_only=True,
-                order_type="ioc",
-            )
-            if close_result.get("status") != "ok":
-                logger.error(f"Close order failed: {close_result.get('msg')}")
+        await self.trade_executor.close_position_on_exchange(position, exit_price)
 
         # Send notification
         if self.telegram:
@@ -731,15 +592,7 @@ class TradingBot:
 
     async def _check_circuit_breaker_cooldown(self):
         """Check if circuit breaker cooldown has expired"""
-        if not self.circuit_breaker_triggered or self.circuit_breaker_until is None:
-            return
-
-        if datetime.now() >= self.circuit_breaker_until:
-            logger.info("✅ Circuit breaker cooldown expired - resuming trading")
-            self.circuit_breaker_triggered = False
-            self.circuit_breaker_until = None
-            self.consecutive_losses = 0
-
+        if self.risk_guard.check_circuit_breaker_cooldown():
             if self.telegram:
                 await self.telegram.notify_circuit_breaker(
                     False, 0, self.config.MAX_CONSECUTIVE_LOSSES
@@ -747,17 +600,7 @@ class TradingBot:
 
     async def _trigger_circuit_breaker(self):
         """Trigger circuit breaker after consecutive losses"""
-        self.circuit_breaker_triggered = True
-        cooldown = timedelta(minutes=self.config.CIRCUIT_BREAKER_COOLDOWN_MINUTES)
-        self.circuit_breaker_until = datetime.now() + cooldown
-
-        logger.warning("=" * 60)
-        logger.warning("⛔ CIRCUIT BREAKER TRIGGERED!")
-        logger.warning(f"   Consecutive losses: {self.consecutive_losses}")
-        logger.warning(
-            f"   Cooldown: {self.config.CIRCUIT_BREAKER_COOLDOWN_MINUTES} minutes"
-        )
-        logger.warning("=" * 60)
+        self.risk_guard.trigger_circuit_breaker()
 
         if self.telegram:
             await self.telegram.notify_circuit_breaker(
@@ -769,31 +612,9 @@ class TradingBot:
 
     async def _update_unrealized_pnl(self):
         """Update unrealized P&L for open positions"""
-        if not self.positions:
-            return
-
-        # Use cached mids from WebSocket if recent (< 30s), otherwise fetch
-        if (
-            self._mids_last_update
-            and (datetime.now() - self._mids_last_update).total_seconds() < 30
-            and self.config.ASSET in self._cached_mids
-        ):
-            current_price = self._cached_mids[self.config.ASSET]
-        else:
-            mids = await self.api.get_mids()
-            current_price = float(mids.get(self.config.ASSET, 0))
-
-        if current_price == 0:
-            return
-
-        for position in self.positions:
-            if position.side == Side.LONG:
-                pnl = (current_price - position.entry_price) * position.quantity
-            else:
-                pnl = (position.entry_price - current_price) * position.quantity
-
-            position.unrealized_pnl = pnl
-            self.db.save_position(position)
+        await self.position_manager.update_unrealized_pnl(
+            self.api, self.config, self.db
+        )
 
     # Emergency controls
 
@@ -805,16 +626,9 @@ class TradingBot:
 
         logger.warning(f"[{reason}] Closing {len(self.positions)} position(s)...")
 
-        # Use cached mids from WebSocket if recent (< 30s), otherwise fetch
-        if (
-            self._mids_last_update
-            and (datetime.now() - self._mids_last_update).total_seconds() < 30
-            and self.config.ASSET in self._cached_mids
-        ):
-            current_price = self._cached_mids[self.config.ASSET]
-        else:
-            mids = await self.api.get_mids()
-            current_price = float(mids.get(self.config.ASSET, 0))
+        current_price = await self.position_manager._get_current_price(
+            self.api, self.config
+        )
 
         positions_to_close = self.positions[:]
 
