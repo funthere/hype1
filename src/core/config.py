@@ -1,63 +1,17 @@
 """
 Configuration and data models for the trading bot
+
+Domain models (Side, OrderStatus, Position, Trade) are now defined in
+src.core.models and re-exported here for backward compatibility.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
-from enum import Enum
 from typing import Optional
 
 from hyperliquid.utils import constants
 
-
-class Side(Enum):
-    """Trade side"""
-
-    LONG = "LONG"
-    SHORT = "SHORT"
-
-
-class OrderStatus(Enum):
-    """Order status"""
-
-    PENDING = "pending"
-    OPEN = "open"
-    FILLED = "filled"
-    PARTIALLY_FILLED = "partially_filled"
-    CANCELLED = "cancelled"
-    REJECTED = "rejected"
-
-
-@dataclass
-class Position:
-    """Open position tracking"""
-
-    side: Side
-    entry_price: float
-    quantity: float
-    tp_price: float
-    sl_price: float
-    entry_time: datetime
-    leverage: int
-    oid: Optional[int] = None
-    cloid: Optional[str] = None
-    status: OrderStatus = OrderStatus.OPEN
-    unrealized_pnl: float = 0.0
-
-
-@dataclass
-class Trade:
-    """Completed trade tracking"""
-
-    side: Side
-    entry_price: float
-    exit_price: float
-    quantity: float
-    entry_time: datetime
-    exit_time: Optional[datetime] = None
-    pnl: float = 0.0
-    fees: float = 0.0
-    notes: str = ""  # Optional notes for trade journal
+# Re-export unified domain models for backward compatibility
+from src.core.models import Side, OrderStatus, Position, Trade  # noqa: F401
 
 
 @dataclass

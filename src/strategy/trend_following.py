@@ -17,12 +17,13 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
-from enum import Enum
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 from hyperliquid.info import Info
+
+from src.core.models import Side, PositionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -30,16 +31,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-
-
-class TrendPositionSide(Enum):
-    LONG = "LONG"
-    SHORT = "SHORT"
-
-
-class TrendPositionStatus(Enum):
-    OPEN = "open"
-    CLOSED = "closed"
 
 
 @dataclass
@@ -124,7 +115,7 @@ class TrendPosition:
 
     id: str
     coin: str
-    side: TrendPositionSide
+    side: Side
     entry_price: float
     quantity: float
     notional: float
@@ -135,7 +126,7 @@ class TrendPosition:
     trailing_stop: float = 0.0
     highest_profit_price: float = 0.0
     lowest_profit_price: float = float("inf")
-    status: TrendPositionStatus = TrendPositionStatus.OPEN
+    status: PositionStatus = PositionStatus.OPEN
     close_reason: str = ""
     close_time: Optional[float] = None
     close_price: Optional[float] = None
@@ -201,7 +192,7 @@ class TrendFollowingStrategy:
     async def open_position(
         self,
         coin: str,
-        side: TrendPositionSide,
+        side: Side,
         price: float,
         atr: float,
     ) -> Optional[str]:
@@ -210,14 +201,14 @@ class TrendFollowingStrategy:
             # Check limits
             open_count = sum(
                 1 for p in self._positions.values()
-                if p.status == TrendPositionStatus.OPEN
+                if p.status == PositionStatus.OPEN
             )
             if open_count >= self.config.MAX_CONCURRENT_POSITIONS:
                 return None
 
             # No duplicate positions for same coin
             for p in self._positions.values():
-                if p.coin == coin and p.status == TrendPositionStatus.OPEN:
+                if p.coin == coin and p.status == PositionStatus.OPEN:
                     return None
 
             # Position sizing
@@ -231,7 +222,7 @@ class TrendFollowingStrategy:
                 return None
 
             # Calculate stops
-            if side == TrendPositionSide.LONG:
+            if side == Side.LONG:
                 stop_loss = price - atr * self.config.ATR_STOP_MULT
                 take_profit = price + atr * self.config.ATR_TP_MULT
             else:
@@ -273,8 +264,8 @@ class TrendFollowingStrategy:
                 atr_at_entry=atr,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
-                highest_profit_price=price if side == TrendPositionSide.LONG else price,
-                lowest_profit_price=price if side == TrendPositionSide.SHORT else price,
+                highest_profit_price=price if side == Side.LONG else price,
+                lowest_profit_price=price if side == Side.SHORT else price,
             )
 
             if self.config.USE_TRAILING_STOP:
@@ -313,7 +304,7 @@ class TrendFollowingStrategy:
         """Close an existing trend following position."""
         try:
             pos = self._positions.get(position_id)
-            if pos is None or pos.status == TrendPositionStatus.CLOSED:
+            if pos is None or pos.status == PositionStatus.CLOSED:
                 return False
 
             if current_price is None or current_price <= 0:
@@ -322,7 +313,7 @@ class TrendFollowingStrategy:
                 current_price = float(mid_str) if mid_str else pos.entry_price
 
             # Calculate PnL
-            if pos.side == TrendPositionSide.LONG:
+            if pos.side == Side.LONG:
                 price_pnl = (current_price - pos.entry_price) * pos.quantity
             else:
                 price_pnl = (pos.entry_price - current_price) * pos.quantity
@@ -337,9 +328,9 @@ class TrendFollowingStrategy:
                 )
             else:
                 close_side = (
-                    TrendPositionSide.LONG
-                    if pos.side == TrendPositionSide.SHORT
-                    else TrendPositionSide.SHORT
+                    Side.LONG
+                    if pos.side == Side.SHORT
+                    else Side.SHORT
                 )
                 result = await self.api.place_order(
                     side=close_side.value,
@@ -356,7 +347,7 @@ class TrendFollowingStrategy:
                     position_id, pos.coin, reason, realized_pnl,
                 )
 
-            pos.status = TrendPositionStatus.CLOSED
+            pos.status = PositionStatus.CLOSED
             pos.close_reason = reason
             pos.close_time = time.time()
             pos.close_price = current_price
@@ -389,7 +380,7 @@ class TrendFollowingStrategy:
         """Evaluate all open positions for exit conditions."""
         open_positions = [
             p for p in self._positions.values()
-            if p.status == TrendPositionStatus.OPEN
+            if p.status == PositionStatus.OPEN
         ]
         if not open_positions:
             return
@@ -414,7 +405,7 @@ class TrendFollowingStrategy:
 
             # Update trailing stop
             if self.config.USE_TRAILING_STOP:
-                if pos.side == TrendPositionSide.LONG:
+                if pos.side == Side.LONG:
                     if current_price > pos.highest_profit_price:
                         pos.highest_profit_price = current_price
                         new_trail = current_price - pos.atr_at_entry * self.config.TRAILING_STOP_MULT
@@ -426,7 +417,7 @@ class TrendFollowingStrategy:
                         pos.trailing_stop = min(pos.trailing_stop, new_trail) if pos.trailing_stop != 0 else new_trail
 
             # Check exits
-            if pos.side == TrendPositionSide.LONG:
+            if pos.side == Side.LONG:
                 # Trailing stop hit
                 if self.config.USE_TRAILING_STOP and current_price <= pos.trailing_stop:
                     should_close = True
@@ -440,7 +431,7 @@ class TrendFollowingStrategy:
                     should_close = True
                     reason = f"take_profit ({current_price:.2f} >= {pos.take_profit:.2f})"
                 # Trend reversal: check if fast EMA crossed below slow EMA
-                elif await self._check_trend_reversal(pos.coin, TrendPositionSide.LONG):
+                elif await self._check_trend_reversal(pos.coin, Side.LONG):
                     should_close = True
                     reason = "trend_reversal"
             else:
@@ -454,7 +445,7 @@ class TrendFollowingStrategy:
                 elif current_price <= pos.take_profit:
                     should_close = True
                     reason = f"take_profit ({current_price:.2f} <= {pos.take_profit:.2f})"
-                elif await self._check_trend_reversal(pos.coin, TrendPositionSide.SHORT):
+                elif await self._check_trend_reversal(pos.coin, Side.SHORT):
                     should_close = True
                     reason = "trend_reversal"
 
@@ -465,7 +456,7 @@ class TrendFollowingStrategy:
 
             # Emergency loss stop
             if pos.entry_price > 0:
-                if pos.side == TrendPositionSide.LONG:
+                if pos.side == Side.LONG:
                     price_change = (current_price - pos.entry_price) / pos.entry_price
                 else:
                     price_change = (pos.entry_price - current_price) / pos.entry_price
@@ -533,11 +524,11 @@ class TrendFollowingStrategy:
         """Return current strategy state."""
         open_positions = [
             p for p in self._positions.values()
-            if p.status == TrendPositionStatus.OPEN
+            if p.status == PositionStatus.OPEN
         ]
         closed_positions = [
             p for p in self._positions.values()
-            if p.status == TrendPositionStatus.CLOSED
+            if p.status == PositionStatus.CLOSED
         ]
         total_pnl = sum(p.realized_pnl for p in closed_positions)
 
@@ -670,14 +661,14 @@ class TrendFollowingStrategy:
                 prev_fast <= prev_slow and  # Crossover just happened
                 current_price > current_trend):  # Higher timeframe trend up
 
-                side = TrendPositionSide.LONG
+                side = Side.LONG
 
             # --- SHORT: fast EMA crosses below slow EMA, price below trend EMA ---
             elif (current_fast < current_slow and
                   prev_fast >= prev_slow and  # Crossover just happened
                   current_price < current_trend):  # Higher timeframe trend down
 
-                side = TrendPositionSide.SHORT
+                side = Side.SHORT
 
             if side is None:
                 return None
@@ -696,8 +687,8 @@ class TrendFollowingStrategy:
 
             # Confidence score (0-100)
             adx_score = min(adx.iloc[-1] / 50.0, 1.0) * 40  # Up to 40 pts
-            trend_score = 30 if (side == TrendPositionSide.LONG and current_price > current_trend) or \
-                                (side == TrendPositionSide.SHORT and current_price < current_trend) else 0
+            trend_score = 30 if (side == Side.LONG and current_price > current_trend) or \
+                                (side == Side.SHORT and current_price < current_trend) else 0
             vol_score = min((volume.iloc[-1] / volume.rolling(20).mean().iloc[-1] - 1), 1.0) * 30  # Up to 30 pts
             confidence = round(adx_score + trend_score + vol_score, 1)
 
@@ -717,7 +708,7 @@ class TrendFollowingStrategy:
             logger.debug("Analysis failed for %s: %s", coin, exc)
             return None
 
-    async def _check_trend_reversal(self, coin: str, original_side: TrendPositionSide) -> bool:
+    async def _check_trend_reversal(self, coin: str, original_side: Side) -> bool:
         """Check if the trend has reversed for an existing position."""
         try:
             candles = await self._fetch_candles(coin)
@@ -731,7 +722,7 @@ class TrendFollowingStrategy:
             current_fast = fast_ema.iloc[-1]
             current_slow = slow_ema.iloc[-1]
 
-            if original_side == TrendPositionSide.LONG:
+            if original_side == Side.LONG:
                 return current_fast < current_slow  # Reversed to downtrend
             else:
                 return current_fast > current_slow  # Reversed to uptrend

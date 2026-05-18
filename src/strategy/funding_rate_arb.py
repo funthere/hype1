@@ -17,10 +17,11 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from hyperliquid.info import Info
+
+from src.core.models import Side, PositionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -28,20 +29,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-
-
-class PositionSide(Enum):
-    """Position direction for funding-rate arbitrage."""
-
-    LONG = "LONG"
-    SHORT = "SHORT"
-
-
-class PositionStatus(Enum):
-    """Lifecycle status of a funding arb position."""
-
-    OPEN = "open"
-    CLOSED = "closed"
 
 
 @dataclass
@@ -129,7 +116,7 @@ class FundingPosition:
 
     id: str
     coin: str
-    side: PositionSide
+    side: Side
     entry_rate: float  # funding rate at entry
     entry_price: float  # mark price at entry
     quantity: float  # position size in base asset
@@ -262,7 +249,7 @@ class FundingRateArbStrategy:
     async def open_position(
         self,
         coin: str,
-        side: PositionSide,
+        side: Side,
         rate: float,
         mark_px: float,
     ) -> Optional[str]:
@@ -420,7 +407,7 @@ class FundingRateArbStrategy:
                 current_price = float(mid_str) if mid_str else pos.entry_price
 
             # Calculate PnL
-            if pos.side == PositionSide.LONG:
+            if pos.side == Side.LONG:
                 price_pnl = (current_price - pos.entry_price) * pos.quantity
             else:
                 price_pnl = (pos.entry_price - current_price) * pos.quantity
@@ -443,9 +430,9 @@ class FundingRateArbStrategy:
                 )
             else:
                 close_side = (
-                    PositionSide.LONG
-                    if pos.side == PositionSide.SHORT
-                    else PositionSide.SHORT
+                    Side.LONG
+                    if pos.side == Side.SHORT
+                    else Side.SHORT
                 )
                 result = await self.api.place_order(
                     side=close_side,  # type: ignore[arg-type]
@@ -536,7 +523,7 @@ class FundingRateArbStrategy:
             should_close = False
             reason = ""
 
-            if pos.side == PositionSide.SHORT:
+            if pos.side == Side.SHORT:
                 # Close short when rate drops below negative exit threshold
                 if current_rate < -self.config.EXIT_THRESHOLD:
                     should_close = True
@@ -554,7 +541,7 @@ class FundingRateArbStrategy:
 
             # --- 3. Emergency loss stop ---
             if current_price > 0 and pos.entry_price > 0:
-                if pos.side == PositionSide.LONG:
+                if pos.side == Side.LONG:
                     price_change = (current_price - pos.entry_price) / pos.entry_price
                 else:
                     price_change = (pos.entry_price - current_price) / pos.entry_price
@@ -594,10 +581,10 @@ class FundingRateArbStrategy:
 
             if rate > self.config.ENTRY_THRESHOLD:
                 # High positive rate → SHORT (longs pay shorts)
-                await self.open_position(coin, PositionSide.SHORT, rate, mark_px)
+                await self.open_position(coin, Side.SHORT, rate, mark_px)
             elif rate < -self.config.ENTRY_THRESHOLD:
                 # High negative rate → LONG (shorts pay longs)
-                await self.open_position(coin, PositionSide.LONG, rate, mark_px)
+                await self.open_position(coin, Side.LONG, rate, mark_px)
 
     async def run(self) -> None:
         """Main strategy loop – runs until :meth:`stop` is called."""
@@ -727,7 +714,7 @@ class FundingRateArbStrategy:
         # Pro-rata of the 8h period
         fraction = min(elapsed_hours / 8.0, 1.0)
 
-        if pos.side == PositionSide.SHORT:
+        if pos.side == Side.SHORT:
             # Positive funding: longs pay shorts
             funding_amount = pos.notional * current_rate * fraction
         else:
@@ -735,9 +722,9 @@ class FundingRateArbStrategy:
             funding_amount = pos.notional * (-current_rate) * fraction
 
         # Only credit if it's in the right direction for our position
-        if pos.side == PositionSide.SHORT and current_rate > 0:
+        if pos.side == Side.SHORT and current_rate > 0:
             pos.total_funding_collected += funding_amount
-        elif pos.side == PositionSide.LONG and current_rate < 0:
+        elif pos.side == Side.LONG and current_rate < 0:
             pos.total_funding_collected += funding_amount
 
         # Track last accumulation time (reset every 8h equivalent)
@@ -767,7 +754,7 @@ class FundingRateArbStrategy:
         try:
             # Only hedge shorts (buy spot) — LONG perp already has delta exposure
             # in the favorable direction
-            if pos.side == PositionSide.LONG:
+            if pos.side == Side.LONG:
                 logger.info(
                     "LONG perp for %s — no spot hedge needed (delta is favorable)",
                     pos.coin,
@@ -828,7 +815,7 @@ class FundingRateArbStrategy:
 
             spot_pnl: float = 0.0
 
-            if pos.side == PositionSide.SHORT:
+            if pos.side == Side.SHORT:
                 # We bought spot — sell it now
                 spot_pnl = (current_price - pos.spot_entry_price) * pos.spot_quantity
 

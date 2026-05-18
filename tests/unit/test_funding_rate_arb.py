@@ -8,9 +8,8 @@ from unittest.mock import AsyncMock, Mock
 from src.strategy.funding_rate_arb import (
     FundingArbConfig,
     FundingRateArbStrategy,
-    PositionSide,
-    PositionStatus,
 )
+from src.core.models import Side, PositionStatus
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +122,7 @@ class TestOpenPositionWithSpotHedge:
         """SHORT perp on eligible coin should get a spot BUY hedge."""
         pid = await strategy.open_position(
             coin="BTC",
-            side=PositionSide.SHORT,
+            side=Side.SHORT,
             rate=0.0005,
             mark_px=50000.0,
         )
@@ -137,7 +136,7 @@ class TestOpenPositionWithSpotHedge:
         """LONG perp should NOT get spot hedge (delta already favorable)."""
         pid = await strategy.open_position(
             coin="ETH",
-            side=PositionSide.LONG,
+            side=Side.LONG,
             rate=-0.0005,
             mark_px=3000.0,
         )
@@ -150,7 +149,7 @@ class TestOpenPositionWithSpotHedge:
         """Ineligible coin should NOT get spot hedge."""
         pid = await strategy.open_position(
             coin="PEPE",
-            side=PositionSide.SHORT,
+            side=Side.SHORT,
             rate=0.0010,
             mark_px=0.01,
         )
@@ -165,7 +164,7 @@ class TestOpenPositionWithSpotHedge:
         s = FundingRateArbStrategy(config_no_hedge, mock_api, mock_db)
         pid = await s.open_position(
             coin="BTC",
-            side=PositionSide.SHORT,
+            side=Side.SHORT,
             rate=0.0005,
             mark_px=50000.0,
         )
@@ -185,7 +184,7 @@ class TestClosePositionWithSpotHedge:
         """Closing SHORT+spot should sell spot and add spot PnL."""
         pid = await strategy.open_position(
             coin="BTC",
-            side=PositionSide.SHORT,
+            side=Side.SHORT,
             rate=0.0005,
             mark_px=50000.0,
         )
@@ -202,7 +201,7 @@ class TestClosePositionWithSpotHedge:
         """Closing SHORT+spot when price went up → spot gains offset perp loss."""
         pid = await strategy.open_position(
             coin="BTC",
-            side=PositionSide.SHORT,
+            side=Side.SHORT,
             rate=0.0005,
             mark_px=50000.0,
         )
@@ -218,7 +217,7 @@ class TestClosePositionWithSpotHedge:
         """Closing SHORT+spot when price went down → spot loss, perp gains."""
         pid = await strategy.open_position(
             coin="BTC",
-            side=PositionSide.SHORT,
+            side=Side.SHORT,
             rate=0.0005,
             mark_px=50000.0,
         )
@@ -234,7 +233,7 @@ class TestClosePositionWithSpotHedge:
         """Closing position without hedge should have zero spot PnL."""
         pid = await strategy.open_position(
             coin="PEPE",  # Not in SPOT_ELIGIBLE_COINS
-            side=PositionSide.SHORT,
+            side=Side.SHORT,
             rate=0.0010,
             mark_px=0.01,
         )
@@ -256,7 +255,7 @@ class TestStatusWithSpotHedge:
     async def test_status_includes_spot_fields(self, strategy):
         _pid = await strategy.open_position(
             coin="SOL",
-            side=PositionSide.SHORT,
+            side=Side.SHORT,
             rate=0.0005,
             mark_px=150.0,
         )
@@ -298,7 +297,7 @@ class TestLiveSpotOrders:
 
         pid = await s.open_position(
             coin="BTC",
-            side=PositionSide.SHORT,
+            side=Side.SHORT,
             rate=0.0005,
             mark_px=50000.0,
         )
@@ -326,7 +325,7 @@ class TestLiveSpotOrders:
 
         pid = await s.open_position(
             coin="BTC",
-            side=PositionSide.SHORT,
+            side=Side.SHORT,
             rate=0.0005,
             mark_px=50000.0,
         )
@@ -358,7 +357,7 @@ class TestLiveSpotOrders:
 
         pid = await s.open_position(
             coin="BTC",
-            side=PositionSide.SHORT,
+            side=Side.SHORT,
             rate=0.0005,
             mark_px=50000.0,
         )
