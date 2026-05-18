@@ -4,6 +4,7 @@ Unit tests for TradingBot orchestrator
 
 import pytest
 import asyncio
+import logging
 import signal
 from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime, timedelta
@@ -883,15 +884,16 @@ class TestTradingBotUnrealizedPnL:
 class TestTradingBotStatistics:
     """Test statistics printing"""
 
-    def test_print_statistics_empty(self, mock_all, capsys):
+    def test_print_statistics_empty(self, mock_all, caplog):
         bot = create_bot(mocks=mock_all)
-        bot.print_statistics()
-        captured = capsys.readouterr()
-        assert "TRADING BOT STATISTICS" in captured.out
-        assert "Total Trades:" in captured.out
-        assert "Win Rate:" in captured.out
+        with caplog.at_level(logging.INFO):
+            bot.print_statistics()
+        log_output = caplog.text
+        assert "TRADING BOT STATISTICS" in log_output
+        assert "Total Trades:" in log_output
+        assert "Win Rate:" in log_output
 
-    def test_print_statistics_with_trades(self, mock_all, capsys):
+    def test_print_statistics_with_trades(self, mock_all, caplog):
         bot = create_bot(mocks=mock_all)
         bot.trades = [
             Trade(
@@ -915,10 +917,11 @@ class TestTradingBotStatistics:
                 fees=2.0,
             ),
         ]
-        bot.print_statistics()
-        captured = capsys.readouterr()
-        assert "Total Trades:         2" in captured.out
-        assert "Win Rate:             50.0%" in captured.out
+        with caplog.at_level(logging.INFO):
+            bot.print_statistics()
+        log_output = caplog.text
+        assert "Total Trades:         2" in log_output
+        assert "Win Rate:             50.0%" in log_output
 
 
 class TestTradingBotSignalHandlers:

@@ -21,16 +21,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.core.config import BotConfig
 from src.bot.trading_bot import TradingBot
+from src.core.logging_config import setup_logging
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("hype_paper_bot.log"),
-        logging.StreamHandler(),
-    ],
-)
+setup_logging(level=logging.INFO, log_file="hype_paper_bot.log")
 logger = logging.getLogger(__name__)
 
 

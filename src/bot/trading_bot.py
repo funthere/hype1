@@ -12,6 +12,7 @@ from typing import Optional, List, Dict
 from ..core.config import BotConfig, Side, Position, Trade, OrderStatus
 from ..core.strategy import StrategyEngine, RiskManager
 from ..core.survival_risk import SurvivalRiskManager
+from ..core.logging_config import set_trade_id, get_trade_id, TradeLoggerAdapter
 from ..exchange.connector import HyperliquidAPI
 from ..exchange.market_data import MarketDataFeed
 from ..storage.database import DatabaseManager
@@ -20,7 +21,7 @@ from ..analytics.adaptive import AdaptiveParameterManager
 from ..analytics.health import HealthMonitor
 from ..analytics.performance import PerformanceAnalyzer
 
-logger = logging.getLogger(__name__)
+logger = TradeLoggerAdapter(logging.getLogger(__name__))
 
 
 class TradingBot:
@@ -374,6 +375,10 @@ class TradingBot:
             leverage=self.config.LEVERAGE,
         )
 
+        # Set trade correlation ID based on position entry time
+        trade_id = f"{side.value}_{entry_price:.4f}_{position.entry_time.strftime('%Y%m%d%H%M%S')}"
+        set_trade_id(trade_id)
+
         # Place order on exchange (skip for paper trading)
         if not self.config.PAPER_TRADING:
             result = await self.api.place_order(
@@ -581,6 +586,10 @@ class TradingBot:
 
     async def _close_position(self, position: Position, exit_price: float, reason: str):
         """Close a position"""
+        # Set trade correlation ID for this close operation
+        trade_id = f"{position.side.value}_{position.entry_price:.4f}_{position.entry_time.strftime('%Y%m%d%H%M%S')}"
+        set_trade_id(trade_id)
+
         logger.info(
             f"Closing {position.side.value} position @ ${exit_price:.4f} ({reason})"
         )
@@ -683,6 +692,9 @@ class TradingBot:
         # Send notification
         if self.telegram:
             await self.telegram.notify_trade_exit(trade)
+
+        # Clear trade correlation ID after close
+        set_trade_id(None)
 
     # Risk management
 
@@ -914,28 +926,28 @@ class TradingBot:
             minutes, _ = divmod(remainder, 60)
             runtime = f"{hours}h {minutes}m"
 
-        print("\n" + "=" * 60)
-        print("TRADING BOT STATISTICS")
-        print("=" * 60)
-        print(f"Runtime:              {runtime}")
-        print(f"Starting Capital:     ${self.starting_capital:,.2f}")
-        print(f"Current Capital:      ${self.current_capital:,.2f}")
-        print(f"Total P&L:            ${total_pnl:,.2f} ({pnl_pct:+.2f}%)")
-        print(f"Total Fees:           ${total_fees:,.2f}")
-        print("-" * 60)
-        print(f"Total Trades:         {total_trades}")
-        print(f"Winning Trades:       {winning_trades}")
-        print(f"Losing Trades:        {losing_trades}")
-        print(f"Win Rate:             {win_rate:.1f}%")
-        print(f"Avg Win:              ${avg_win:,.2f}")
-        print(f"Avg Loss:             ${avg_loss:,.2f}")
-        print(f"Best Trade:           ${best_trade:,.2f}")
-        print(f"Worst Trade:          ${worst_trade:,.2f}")
-        print("-" * 60)
-        print(f"Max Drawdown:         {self.max_drawdown_pct:.2%}")
-        print(f"Open Positions:       {len(self.positions)}")
-        print(f"Consecutive Losses:   {self.consecutive_losses}")
-        print(
+        logger.info("=" * 60)
+        logger.info("TRADING BOT STATISTICS")
+        logger.info("=" * 60)
+        logger.info(f"Runtime:              {runtime}")
+        logger.info(f"Starting Capital:     ${self.starting_capital:,.2f}")
+        logger.info(f"Current Capital:      ${self.current_capital:,.2f}")
+        logger.info(f"Total P&L:            ${total_pnl:,.2f} ({pnl_pct:+.2f}%)")
+        logger.info(f"Total Fees:           ${total_fees:,.2f}")
+        logger.info("-" * 60)
+        logger.info(f"Total Trades:         {total_trades}")
+        logger.info(f"Winning Trades:       {winning_trades}")
+        logger.info(f"Losing Trades:        {losing_trades}")
+        logger.info(f"Win Rate:             {win_rate:.1f}%")
+        logger.info(f"Avg Win:              ${avg_win:,.2f}")
+        logger.info(f"Avg Loss:             ${avg_loss:,.2f}")
+        logger.info(f"Best Trade:           ${best_trade:,.2f}")
+        logger.info(f"Worst Trade:          ${worst_trade:,.2f}")
+        logger.info("-" * 60)
+        logger.info(f"Max Drawdown:         {self.max_drawdown_pct:.2%}")
+        logger.info(f"Open Positions:       {len(self.positions)}")
+        logger.info(f"Consecutive Losses:   {self.consecutive_losses}")
+        logger.info(
             f"Circuit Breaker:      {'ACTIVE' if self.circuit_breaker_triggered else 'Off'}"
         )
 
@@ -943,32 +955,32 @@ class TradingBot:
         if self.trades:
             try:
                 metrics = self.performance_analyzer.calculate_metrics()
-                print("-" * 60)
-                print("PERFORMANCE ANALYTICS")
-                print("-" * 60)
-                print(f"Sharpe Ratio:          {metrics.sharpe_ratio:.2f}")
-                print(f"Sortino Ratio:         {metrics.sortino_ratio:.2f}")
-                print(f"Calmar Ratio:          {metrics.calmar_ratio:.2f}")
-                print(f"Profit Factor:         {metrics.profit_factor:.2f}")
-                print(f"Max Winning Streak:    {metrics.max_winning_streak}")
-                print(f"Max Losing Streak:     {metrics.max_losing_streak}")
+                logger.info("-" * 60)
+                logger.info("PERFORMANCE ANALYTICS")
+                logger.info("-" * 60)
+                logger.info(f"Sharpe Ratio:          {metrics.sharpe_ratio:.2f}")
+                logger.info(f"Sortino Ratio:         {metrics.sortino_ratio:.2f}")
+                logger.info(f"Calmar Ratio:          {metrics.calmar_ratio:.2f}")
+                logger.info(f"Profit Factor:         {metrics.profit_factor:.2f}")
+                logger.info(f"Max Winning Streak:    {metrics.max_winning_streak}")
+                logger.info(f"Max Losing Streak:     {metrics.max_losing_streak}")
             except Exception:
                 pass
 
         # Adaptive parameters
         try:
             params = self.adaptive_params.get_parameters()
-            print("-" * 60)
-            print("ADAPTIVE PARAMETERS")
-            print("-" * 60)
-            print(f"Volatility Regime:     {params.volatility_regime.value}")
-            print(f"Market Phase:          {params.market_phase.value}")
-            print(f"Adjusted Leverage:     {params.leverage}x")
-            print(f"Adjusted Risk:         {params.risk_per_trade:.1%}")
+            logger.info("-" * 60)
+            logger.info("ADAPTIVE PARAMETERS")
+            logger.info("-" * 60)
+            logger.info(f"Volatility Regime:     {params.volatility_regime.value}")
+            logger.info(f"Market Phase:          {params.market_phase.value}")
+            logger.info(f"Adjusted Leverage:     {params.leverage}x")
+            logger.info(f"Adjusted Risk:         {params.risk_per_trade:.1%}")
         except Exception:
             pass
 
-        print("=" * 60 + "\n")
+        logger.info("=" * 60)
 
     def _start_api_server(self) -> None:
         """Start the API server if enabled"""

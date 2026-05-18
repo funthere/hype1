@@ -36,6 +36,7 @@ from src.strategy.trend_following import (
     TrendFollowingConfig,
     TrendFollowingStrategy,
 )
+from src.core.logging_config import setup_logging
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -43,14 +44,7 @@ from src.strategy.trend_following import (
 
 console = Console()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.FileHandler("trend_following.log"),
-        logging.StreamHandler(),
-    ],
-)
+setup_logging(level=logging.INFO, log_file="trend_following.log")
 logger = logging.getLogger("trend_following_runner")
 
 

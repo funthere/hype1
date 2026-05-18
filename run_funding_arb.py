@@ -41,6 +41,7 @@ from src.strategy.funding_rate_arb import (
     FundingArbConfig,
     FundingRateArbStrategy,
 )
+from src.core.logging_config import setup_logging
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -48,14 +49,7 @@ from src.strategy.funding_rate_arb import (
 
 console = Console()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.FileHandler("funding_arb.log"),
-        logging.StreamHandler(),
-    ],
-)
+setup_logging(level=logging.INFO, log_file="funding_arb.log")
 logger = logging.getLogger("funding_arb_runner")
 
 
