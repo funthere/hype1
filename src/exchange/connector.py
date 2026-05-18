@@ -11,6 +11,7 @@ from hyperliquid.info import Info
 from hyperliquid.exchange import Exchange
 
 from ..core.config import BotConfig, Side
+from .retry import retry_with_backoff
 
 logger = logging.getLogger(__name__)
 
@@ -113,16 +114,19 @@ class HyperliquidAPI:
             else:
                 hl_order_type = {"limit": {"tif": "Gtc"}}
 
-            order_result = await asyncio.to_thread(
-                self.exchange.order,
-                coin=self.config.ASSET,
-                is_buy=(side == Side.LONG),
-                sz=quantity,
-                limit_px=price,
-                order_type=hl_order_type,
-                reduce_only=reduce_only,
-                cloid=cloid,
-            )
+            async def _place():
+                return await asyncio.to_thread(
+                    self.exchange.order,
+                    coin=self.config.ASSET,
+                    is_buy=(side == Side.LONG),
+                    sz=quantity,
+                    limit_px=price,
+                    order_type=hl_order_type,
+                    reduce_only=reduce_only,
+                    cloid=cloid,
+                )
+
+            order_result = await retry_with_backoff(_place)
 
             if order_result.get("status") == "ok":
                 return {
@@ -143,9 +147,12 @@ class HyperliquidAPI:
     async def cancel_order(self, oid: int) -> Dict:
         """Cancel order by order ID"""
         try:
-            result = await asyncio.to_thread(
-                self.exchange.cancel, coin=self.config.ASSET, oid=oid
-            )
+            async def _cancel():
+                return await asyncio.to_thread(
+                    self.exchange.cancel, coin=self.config.ASSET, oid=oid
+                )
+
+            result = await retry_with_backoff(_cancel)
 
             if result.get("status") == "ok":
                 logger.info(f"Cancelled order {oid}")
@@ -185,7 +192,10 @@ class HyperliquidAPI:
     async def get_open_orders(self) -> List[Dict]:
         """Get all open orders for the asset"""
         try:
-            orders = await asyncio.to_thread(self.info.open_orders, self.config.ASSET)
+            async def _get_orders():
+                return await asyncio.to_thread(self.info.open_orders, self.config.ASSET)
+
+            orders = await retry_with_backoff(_get_orders)
             return orders if orders else []
         except Exception as e:
             logger.error(f"Failed to get open orders: {e}")
@@ -197,7 +207,10 @@ class HyperliquidAPI:
             if not self.address:
                 return []
 
-            user_state = await asyncio.to_thread(self.info.user_state, self.address)
+            async def _get_positions():
+                return await asyncio.to_thread(self.info.user_state, self.address)
+
+            user_state = await retry_with_backoff(_get_positions)
             asset_positions = user_state.get("assetPositions", [])
 
             positions = []
@@ -215,10 +228,111 @@ class HyperliquidAPI:
     async def get_mids(self) -> Dict:
         """Get current mid prices for all assets"""
         try:
-            return await asyncio.to_thread(self.info.all_mids)
+            async def _get_mids():
+                return await asyncio.to_thread(self.info.all_mids)
+
+            return await retry_with_backoff(_get_mids)
         except Exception as e:
             logger.error(f"Failed to get mids: {e}")
             return {}
+
+    async def get_funding_rate(self, coin: Optional[str] = None) -> Dict:
+        """Get funding rate for a specific asset.
+
+        Args:
+            coin: Asset symbol (defaults to configured ASSET).
+
+        Returns:
+            Dict with keys: funding_rate, mark_px, mid_px, open_interest.
+            Empty dict on failure.
+        """
+        target_coin = coin or self.config.ASSET
+        try:
+            async def _get_funding():
+                return await asyncio.to_thread(self.info.meta_and_asset_ctxs)
+
+            raw = await retry_with_backoff(_get_funding)
+
+            if not raw or len(raw) < 2:
+                logger.warning("meta_and_asset_ctxs returned unexpected format")
+                return {}
+
+            meta, ctxs = raw[0], raw[1]
+            universe = meta.get("universe", [])
+
+            for idx, ctx in enumerate(ctxs):
+                if idx >= len(universe):
+                    break
+                if universe[idx].get("name") == target_coin:
+                    return {
+                        "funding_rate": float(ctx.get("funding", "0") or "0"),
+                        "mark_px": float(ctx.get("markPx", "0") or "0"),
+                        "mid_px": float(ctx.get("midPx", "0") or "0"),
+                        "open_interest": float(ctx.get("openInterest", "0") or "0"),
+                    }
+
+            logger.warning(f"{target_coin} not found in universe for funding rate")
+            return {}
+
+        except Exception as e:
+            logger.error(f"Failed to get funding rate for {target_coin}: {e}")
+            return {}
+
+    async def close_position(
+        self,
+        side: Side,
+        quantity: float,
+        price: Optional[float] = None,
+    ) -> Dict:
+        """Close an existing position by placing a reduce-only order.
+
+        Args:
+            side: The side of the position being closed (opposite order side).
+            quantity: Size to close.
+            price: Limit price (defaults to market via IOC).
+
+        Returns:
+            Dict with order result.
+        """
+        try:
+            await self.get_asset_index()
+
+            # Use IOC for immediate fill if no price specified
+            if price is None:
+                mids = await self.get_mids()
+                price = float(mids.get(self.config.ASSET, 0))
+                if price <= 0:
+                    return {"status": "error", "msg": "Cannot close: no valid price"}
+
+            # Close = opposite side with reduce_only
+            close_side = Side.SHORT if side == Side.LONG else Side.LONG
+
+            async def _close():
+                return await asyncio.to_thread(
+                    self.exchange.order,
+                    coin=self.config.ASSET,
+                    is_buy=(close_side == Side.LONG),
+                    sz=quantity,
+                    limit_px=price,
+                    order_type={"limit": {"tif": "Ioc"}},
+                    reduce_only=True,
+                )
+
+            result = await retry_with_backoff(_close)
+
+            if result.get("status") == "ok":
+                logger.info(
+                    f"Closed {side.value} position: {quantity} @ {price}"
+                )
+                return {"status": "ok", "response": result.get("response", {})}
+            else:
+                error_msg = result.get("response", {}).get("error", "Unknown error")
+                logger.error(f"Close position failed: {error_msg}")
+                return {"status": "error", "msg": error_msg}
+
+        except Exception as e:
+            logger.error(f"Close position exception: {e}")
+            return {"status": "error", "msg": str(e)}
 
     async def get_balance(self) -> Dict:
         """Get account balance and margin information"""
