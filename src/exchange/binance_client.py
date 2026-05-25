@@ -25,6 +25,13 @@ SYMBOL_MAP = {
     "BTC": "BTCUSDT",
     "ETH": "ETHUSDT",
     "SOL": "SOLUSDT",
+    "TST": "TSTUSDT",
+    "UNI": "UNIUSDT",
+    "W": "WUSDT",
+    "ZEN": "ZENUSDT",
+    "XRP": "XRPUSDT",
+    "TON": "TONUSDT",
+    "TRUMP": "TRUMPUSDT",
 }
 
 

@@ -15,6 +15,13 @@ coins:
   - BTC
   - ETH
   - SOL
+  - TST
+  - UNI
+  - W
+  - ZEN
+  - XRP
+  - TON
+  - TRUMP
 
 # --- Funding rate thresholds (per-hour basis) ---
 # Both exchanges report per-8h; converted to hourly internally.
@@ -29,7 +36,7 @@ max_position_size_usd: 5000  # hard cap per leg in USD
 leverage: 3
 
 # --- Risk management ---
-max_concurrent_positions: 3
+max_concurrent_positions: 5
 max_hold_hours: 72.0
 max_loss_pct: 0.05           # 5 % max loss per position pair
 max_exposure_per_coin_pct: 0.25  # 25 % of capital per coin
@@ -43,6 +50,13 @@ binance_markets:
   BTC: BTCUSDT
   ETH: ETHUSDT
   SOL: SOLUSDT
+  TST: TSTUSDT
+  UNI: UNIUSDT
+  W: WUSDT
+  ZEN: ZENUSDT
+  XRP: XRPUSDT
+  TON: TONUSDT
+  TRUMP: TRUMPUSDT
 
 # --- HyperLiquid API ---
 hl_base_url: "https://api.hyperliquid.xyz"
