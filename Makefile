@@ -1,7 +1,7 @@
 # HYPE Trading Bot Makefile
 # Convenience commands for running and managing the trading bot
 
-.PHONY: help install run-paper run-testnet run-mainnet dashboard clean kill-bot kill-dashboard log-paper log-testnet db-view db-backup test lint format
+.PHONY: help install run-paper run-testnet run-mainnet dashboard clean kill-bot kill-dashboard log-paper log-testnet db-view db-backup test lint format run-cross-arb kill-cross-arb log-cross-arb
 
 # Default port for API server
 API_PORT ?= 8000
@@ -177,3 +177,23 @@ lint:
 format:
 	@echo "Formatting code..."
 	@ruff format src/ tests/ run_*.py bot_api_server.py hype_dashboard.py
+
+# Run cross-exchange funding rate arb (paper)
+run-cross-arb:
+	@echo "Starting cross-exchange funding rate arb bot (paper)..."
+	@python3 run_cross_exchange_arb.py --config cross_exchange_arb_config.yaml
+
+# Kill cross-exchange arb bot
+kill-cross-arb:
+	@echo "Killing cross-exchange arb bot..."
+	@pkill -f "run_cross_exchange_arb.py" 2>/dev/null || echo "No cross-exchange arb bot found"
+	@echo "✓ Cross-exchange arb bot stopped"
+
+# Log cross-exchange arb
+log-cross-arb:
+	@echo "Tailing cross-exchange arb logs (Ctrl+C to exit)..."
+	@if [ -f cross_exchange_arb.log ]; then \
+		tail -f cross_exchange_arb.log; \
+	else \
+		echo "Log file not found (cross_exchange_arb.log)"; \
+	fi

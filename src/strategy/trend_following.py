@@ -17,6 +17,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
@@ -25,6 +26,7 @@ import pandas as pd
 from hyperliquid.info import Info
 
 from ..core.base_config import BaseStrategyConfig
+from ..core.config import Side, Trade
 
 logger = logging.getLogger(__name__)
 
@@ -404,6 +406,27 @@ class TrendFollowingStrategy:
                     },
                 )
 
+                # Save trade to trades table
+                try:
+                    fee = abs(pos.notional) * self.config.TAKER_FEE_PCT
+                    trade = Trade(
+                        side=Side(pos.side.value),
+                        entry_price=pos.entry_price,
+                        exit_price=current_price,
+                        quantity=pos.quantity,
+                        entry_time=datetime.fromtimestamp(pos.entry_time, tz=timezone.utc),
+                        exit_time=datetime.fromtimestamp(pos.close_time, tz=timezone.utc),
+                        pnl=realized_pnl,
+                        fees=fee,
+                        notes=f"{pos.coin} {reason}",
+                    )
+                    self.db.save_trade(trade)
+                except Exception as trade_exc:
+                    logger.error("Failed to save trade to DB: %s", trade_exc)
+
+                # Update daily summary
+                self._update_daily_summary()
+
             return True
 
         except Exception as exc:
@@ -597,6 +620,45 @@ class TrendFollowingStrategy:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _update_daily_summary(self) -> None:
+        """Recompute and save today's daily summary from closed positions."""
+        if not self.db:
+            return
+        try:
+            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            closed_today = [
+                p for p in self._positions.values()
+                if p.status == TrendPositionStatus.CLOSED
+                and p.close_time is not None
+                and datetime.fromtimestamp(p.close_time, tz=timezone.utc).strftime("%Y-%m-%d") == today_str
+            ]
+            if not closed_today:
+                return
+
+            total_trades = len(closed_today)
+            winning = sum(1 for p in closed_today if p.realized_pnl > 0)
+            losing = sum(1 for p in closed_today if p.realized_pnl < 0)
+            total_pnl = sum(p.realized_pnl for p in closed_today)
+            total_fees = sum(
+                abs(p.notional) * self.config.TAKER_FEE_PCT for p in closed_today
+            )
+            win_rate = (winning / total_trades * 100) if total_trades > 0 else 0
+
+            self.db.save_daily_summary(today_str, {
+                "total_trades": total_trades,
+                "winning_trades": winning,
+                "losing_trades": losing,
+                "total_pnl": round(total_pnl, 4),
+                "total_fees": round(total_fees, 4),
+                "win_rate": round(win_rate, 2),
+                "max_drawdown_pct": 0,
+                "starting_capital": self._paper_capital if self.config.PAPER_TRADING else 0,
+                "ending_capital": (self._paper_capital if self.config.PAPER_TRADING else 0),
+            })
+            logger.info("Updated daily summary for %s: %d trades, PnL=%.4f", today_str, total_trades, total_pnl)
+        except Exception as exc:
+            logger.error("Failed to update daily summary: %s", exc)
 
     def _get_info(self) -> Info:
         if self._info is None:
