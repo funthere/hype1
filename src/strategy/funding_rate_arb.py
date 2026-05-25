@@ -209,7 +209,19 @@ class FundingRateArbStrategy:
         """
         try:
             info = self._get_info()
-            raw: tuple = await asyncio.to_thread(info.meta_and_asset_ctxs)
+            # Retry with exponential backoff on 429 rate limits
+            raw: Optional[tuple] = None
+            for attempt in range(3):
+                try:
+                    raw = await asyncio.to_thread(info.meta_and_asset_ctxs)
+                    break
+                except Exception as api_exc:
+                    if "429" in str(api_exc) and attempt < 2:
+                        wait = 30 * (2 ** attempt)  # 30s, 60s
+                        logger.warning("HL API 429 — retrying in %ds (attempt %d/3)", wait, attempt + 1)
+                        await asyncio.sleep(wait)
+                    else:
+                        raise
 
             if not raw or len(raw) < 2:
                 logger.warning("meta_and_asset_ctxs returned unexpected format")
