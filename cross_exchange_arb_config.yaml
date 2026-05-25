@@ -1,0 +1,61 @@
+# =============================================================================
+# Cross-Exchange Funding Rate Arbitrage Configuration
+# HyperLiquid vs Binance Futures  —  BTC, ETH, SOL
+# =============================================================================
+
+# --- Mode ---
+# "paper" or "mainnet"
+mode: paper
+
+# --- Capital (paper mode) ---
+paper_capital: 10000.0
+
+# --- Coins to trade ---
+coins:
+  - BTC
+  - ETH
+  - SOL
+
+# --- Funding rate thresholds (per-hour basis) ---
+# Both exchanges report per-8h; converted to hourly internally.
+# entry_threshold: minimum hourly rate spread to open a position
+# exit_threshold: hourly spread below which we close
+entry_threshold: 0.000005     # 0.0005 % per hour
+exit_threshold:  0.000001     # 0.0001 % per hour
+
+# --- Position sizing ---
+position_size_pct: 0.10      # 10 % of capital per leg
+max_position_size_usd: 5000  # hard cap per leg in USD
+leverage: 3
+
+# --- Risk management ---
+max_concurrent_positions: 3
+max_hold_hours: 72.0
+max_loss_pct: 0.05           # 5 % max loss per position pair
+max_exposure_per_coin_pct: 0.25  # 25 % of capital per coin
+
+# --- Scan interval (seconds) ---
+scan_interval: 300
+
+# --- Binance Futures API ---
+binance_base_url: "https://fapi.binance.com"
+binance_markets:
+  BTC: BTCUSDT
+  ETH: ETHUSDT
+  SOL: SOLUSDT
+
+# --- HyperLiquid API ---
+hl_base_url: "https://api.hyperliquid.xyz"
+
+# --- Fees (approximate, for paper PnL) ---
+hl_maker_fee: -0.0002
+hl_taker_fee:  0.0005
+binance_maker_fee: -0.0002
+binance_taker_fee:  0.0004
+
+# --- Logging ---
+log_file: "cross_exchange_arb.log"
+log_level: "INFO"
+
+# --- Database ---
+database_path: "cross_exchange_arb.db"
