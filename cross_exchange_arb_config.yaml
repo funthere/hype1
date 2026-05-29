@@ -26,9 +26,11 @@ coins:
 # --- Funding rate thresholds (per-hour basis) ---
 # Both exchanges report per-8h; converted to hourly internally.
 # entry_threshold: minimum hourly rate spread to open a position
-# exit_threshold: hourly spread below which we close
-entry_threshold: 0.000005     # 0.0005 % per hour
-exit_threshold:  0.000001     # 0.0001 % per hour
+# IMPORTANT: round-trip fees are ~0.09% (HL 0.05% + Binance 0.04% per leg, 2 legs).
+# Entry spread MUST exceed fees. 0.001/hr = 0.1% which gives slim edge after fees.
+# Old value 0.000005 was 180x below fee breakeven — guaranteed losses.
+entry_threshold: 0.001        # 0.1 % per hour (must exceed ~0.09% round-trip fees)
+exit_threshold:  0.0003       # 0.03 % per hour (close when edge is mostly gone)
 
 # --- Position sizing ---
 position_size_pct: 0.10      # 10 % of capital per leg

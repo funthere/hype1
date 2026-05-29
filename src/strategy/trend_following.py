@@ -64,7 +64,7 @@ class TrendFollowingConfig(BaseStrategyConfig):
     SLOW_EMA_PERIOD: int = 21
     TREND_EMA_PERIOD: int = 50      # Higher timeframe trend filter
     ADX_PERIOD: int = 14
-    ADX_THRESHOLD: float = 20.0     # Minimum trend strength
+    ADX_THRESHOLD: float = 30.0     # Minimum trend strength (raised from 20 — avoid weak/ranging signals)
     ATR_PERIOD: int = 14
 
     # Entry filters
@@ -89,6 +89,18 @@ class TrendFollowingConfig(BaseStrategyConfig):
 
     # Asset filter
     COINS: Optional[List[str]] = None
+
+    # Blacklist — coins with consistent losses, never trade these
+    BLACKLIST: Tuple[str, ...] = ("VVV", "RUNE")
+
+    # Only trade shorts (LONG has 0% win rate in backtest)
+    SHORT_ONLY: bool = True
+
+    # Cooldown — don't re-enter a coin within N hours after closing a position
+    COOLDOWN_HOURS: float = 6.0
+
+    # Trend reversal exit: require minimum hold before allowing reversal exit
+    MIN_HOLD_BEFORE_REVERSAL_HOURS: float = 3.0
 
     # API URLs
     API_URL: str = "https://api.hyperliquid.xyz"
@@ -196,6 +208,9 @@ class TrendFollowingStrategy:
         # Cache candle data per coin
         self._candle_cache: Dict[str, pd.DataFrame] = {}
 
+        # Cooldown tracker: coin -> timestamp of last close
+        self._coin_cooldowns: Dict[str, float] = {}
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -234,6 +249,19 @@ class TrendFollowingStrategy:
     ) -> Optional[str]:
         """Open a new trend following position."""
         try:
+            # Blacklist check
+            if coin in self.config.BLACKLIST:
+                return None
+
+            # SHORT_ONLY mode — reject LONG entries
+            if self.config.SHORT_ONLY and side == TrendPositionSide.LONG:
+                return None
+
+            # Cooldown check — don't re-enter recently closed coins
+            cooldown_end = self._coin_cooldowns.get(coin, 0)
+            if time.time() < cooldown_end:
+                return None
+
             # Check limits
             open_count = sum(
                 1 for p in self._positions.values()
@@ -389,6 +417,9 @@ class TrendFollowingStrategy:
             pos.close_price = current_price
             pos.realized_pnl = realized_pnl
 
+            # Set cooldown for this coin to prevent immediate re-entry
+            self._coin_cooldowns[pos.coin] = time.time() + (self.config.COOLDOWN_HOURS * 3600)
+
             if self.db:
                 self.db.log_event(
                     event_type="trend_close",
@@ -488,7 +519,8 @@ class TrendFollowingStrategy:
                     should_close = True
                     reason = f"take_profit ({current_price:.2f} >= {pos.take_profit:.2f})"
                 # Trend reversal: check if fast EMA crossed below slow EMA
-                elif await self._check_trend_reversal(pos.coin, TrendPositionSide.LONG):
+                # Only after minimum hold time to avoid premature exits
+                elif hold_hours >= self.config.MIN_HOLD_BEFORE_REVERSAL_HOURS and await self._check_trend_reversal(pos.coin, TrendPositionSide.LONG):
                     should_close = True
                     reason = "trend_reversal"
             else:
@@ -502,7 +534,7 @@ class TrendFollowingStrategy:
                 elif current_price <= pos.take_profit:
                     should_close = True
                     reason = f"take_profit ({current_price:.2f} <= {pos.take_profit:.2f})"
-                elif await self._check_trend_reversal(pos.coin, TrendPositionSide.SHORT):
+                elif hold_hours >= self.config.MIN_HOLD_BEFORE_REVERSAL_HOURS and await self._check_trend_reversal(pos.coin, TrendPositionSide.SHORT):
                     should_close = True
                     reason = "trend_reversal"
 
