@@ -40,7 +40,6 @@ from hyperliquid.info import Info
 from src.exchange.binance_client import BinanceClient
 from src.storage.database import DatabaseManager
 from src.strategy.cross_exchange_arb import (
-    ArbSide,
     CrossExchangeArbConfig,
     CrossExchangeArbStrategy,
 )

@@ -1,0 +1,18 @@
+{
+  "provider": {
+    "anthropic": {
+      "options": {
+        "baseURL": "https://api.z.ai/api/anthropic",
+        "apiKey": "400fbe7d421043fab6a81538d8de9ba4.dhIvS0ZkvMscQBs6"
+      }
+    }
+  },
+  "agent": {
+    "coder": {
+      "model": "anthropic/glm-5-turbo"
+    },
+    "task": {
+      "model": "anthropic/glm-5-turbo"
+    }
+  }
+}
