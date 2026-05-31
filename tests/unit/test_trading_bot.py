@@ -1001,14 +1001,13 @@ class TestTradingBotShutdown:
 class TestPositionReconciliation:
     """Test exchange-to-local position reconciliation."""
 
-    def test_maybe_reconcile_skips_paper_mode(self, mock_all):
+    @pytest.mark.asyncio
+    async def test_maybe_reconcile_skips_paper_mode(self, mock_all):
         """Paper trading should never reconcile."""
         bot = create_bot(mocks=mock_all)
         bot.config.PAPER_TRADING = True
         bot._last_reconciliation = None  # never reconciled
-        # Run directly — should return immediately without calling _reconcile
-        import asyncio
-        asyncio.get_event_loop().run_until_complete(bot._maybe_reconcile_positions())
+        await bot._maybe_reconcile_positions()
         bot.api.get_positions.assert_not_called()
 
     @pytest.mark.asyncio
