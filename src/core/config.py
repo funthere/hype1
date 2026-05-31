@@ -9,6 +9,8 @@ from typing import Optional
 
 from hyperliquid.utils import constants
 
+from .base_config import BaseStrategyConfig
+
 
 class Side(Enum):
     """Trade side"""
@@ -61,11 +63,14 @@ class Trade:
 
 
 @dataclass
-class BotConfig:
-    """Bot configuration - supports both environment variables and direct assignment"""
+class BotConfig(BaseStrategyConfig):
+    """Bot configuration - supports both environment variables and direct assignment.
 
-    # Environment
-    USE_TESTNET: bool = False
+    Inherits common fields from BaseStrategyConfig and adds bot-specific
+    settings such as API URL switching, strategy parameters, and notifications.
+    """
+
+    # Override defaults for bot-specific values
     PAPER_TRADING: bool = False
 
     # API URLs (auto-switches based on USE_TESTNET)
@@ -87,19 +92,8 @@ class BotConfig:
             return "wss://api.hyperliquid-testnet.xyz/ws"
         return "wss://api.hyperliquid.xyz/ws"
 
-    # Account
-    PRIVATE_KEY: str = ""
-    ADDRESS: str = ""
-    ACCOUNT_ADDRESS: Optional[str] = None
-
-    # Paper Trading
-    PAPER_CAPITAL: float = 10000
-
-    # Trading
-    ASSET: str = "HYPE"
+    # Asset index
     ASSET_INDEX: int = 0
-    TIMEFRAME: str = "15m"
-    LEVERAGE: int = 5
 
     # Strategy Parameters
     ROC_SHORT: int = 1
@@ -108,29 +102,18 @@ class BotConfig:
     CONFIDENCE_THRESHOLD: int = 45
     EMA_TREND_FILTER: int = 20
 
-    # Risk Management
-    RISK_PER_TRADE_PCT: float = 0.08
+    # Risk Management (additional)
     TP_ATR_MULTIPLIER: float = 2.0
     SL_ATR_MULTIPLIER: float = 0.4
-    MAX_POSITIONS: int = 2
-    MAX_DAILY_TRADES: int = 20
 
     # Order Settings
     ORDER_TYPE: str = "limit"
     MIN_ORDER_SIZE: float = 10
 
-    # Safety
-    MAX_DAILY_LOSS_PCT: float = 0.15
-    EMERGENCY_SHUTDOWN: bool = False
-
     # Circuit Breaker
     CIRCUIT_BREAKER_ENABLED: bool = True
     MAX_CONSECUTIVE_LOSSES: int = 3
     CIRCUIT_BREAKER_COOLDOWN_MINUTES: int = 30
-
-    # Fees
-    MAKER_FEE_PCT: float = -0.0002
-    TAKER_FEE_PCT: float = 0.0004
 
     # Web UI / API
     WEB_UI_ENABLED: bool = True
@@ -142,43 +125,61 @@ class BotConfig:
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
 
-    # Storage
-    DATABASE_PATH: str = "trading_bot.db"
+    # Explicit env vars for BotConfig (extends base set)
+    _ENV_VAR_KEYS = (
+        # Base keys
+        "USE_TESTNET",
+        "PAPER_TRADING",
+        "PRIVATE_KEY",
+        "ADDRESS",
+        "ACCOUNT_ADDRESS",
+        "PAPER_CAPITAL",
+        "ASSET",
+        "TIMEFRAME",
+        "LEVERAGE",
+        "RISK_PER_TRADE_PCT",
+        "POSITION_SIZE_PCT",
+        "MAX_POSITIONS",
+        "MAX_DAILY_TRADES",
+        "MAX_DAILY_LOSS_PCT",
+        "MAX_LOSS_PCT",
+        "EMERGENCY_SHUTDOWN",
+        "MAKER_FEE_PCT",
+        "TAKER_FEE_PCT",
+        "DATABASE_PATH",
+        # Bot-specific keys
+        "ASSET_INDEX",
+        "ROC_SHORT",
+        "ROC_LONG",
+        "MOMENTUM_THRESHOLD",
+        "CONFIDENCE_THRESHOLD",
+        "EMA_TREND_FILTER",
+        "TP_ATR_MULTIPLIER",
+        "SL_ATR_MULTIPLIER",
+        "ORDER_TYPE",
+        "MIN_ORDER_SIZE",
+        "CIRCUIT_BREAKER_ENABLED",
+        "MAX_CONSECUTIVE_LOSSES",
+        "CIRCUIT_BREAKER_COOLDOWN_MINUTES",
+        "WEB_UI_ENABLED",
+        "WEB_UI_HOST",
+        "WEB_UI_PORT",
+        "TELEGRAM_ENABLED",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_CHAT_ID",
+    )
 
     @classmethod
     def from_env(cls) -> "BotConfig":
-        """Create config from environment variables"""
-        from dotenv import load_dotenv
-        import os
+        """Create config from explicitly-named environment variables.
 
-        load_dotenv()
-
-        config = cls()
-
-        # Apply environment variables
-        for key, value in os.environ.items():
-            if hasattr(config, key):
-                attr_type = type(getattr(config, key))
-                if attr_type is bool:
-                    setattr(config, key, value.lower() in ("true", "1", "yes"))
-                elif attr_type is int:
-                    setattr(config, key, int(value))
-                elif attr_type is float:
-                    setattr(config, key, float(value))
-                else:
-                    setattr(config, key, str(value))
-
-        return config
+        Overrides the base ``from_env()`` to return a ``BotConfig`` instance
+        and uses ``BotConfig._ENV_VAR_KEYS`` for the allow-list.
+        """
+        return BaseStrategyConfig.from_env.__func__(cls)
 
     def validate(self) -> bool:
         """Validate configuration"""
-        if not self.PRIVATE_KEY and not self.PAPER_TRADING:
-            raise ValueError("PRIVATE_KEY required for live trading")
-
-        if self.RISK_PER_TRADE_PCT <= 0 or self.RISK_PER_TRADE_PCT > 1:
-            raise ValueError("RISK_PER_TRADE_PCT must be between 0 and 1")
-
-        if self.LEVERAGE < 1 or self.LEVERAGE > 100:
-            raise ValueError("LEVERAGE must be between 1 and 100")
-
+        # Run base validations first
+        super().validate()
         return True

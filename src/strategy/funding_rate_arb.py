@@ -18,9 +18,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 from hyperliquid.info import Info
+
+from ..core.base_config import BaseStrategyConfig
 
 logger = logging.getLogger(__name__)
 
@@ -45,37 +47,27 @@ class PositionStatus(Enum):
 
 
 @dataclass
-class FundingArbConfig:
-    """Standalone configuration for the Funding Rate Arbitrage strategy.
+class FundingArbConfig(BaseStrategyConfig):
+    """Configuration for the Funding Rate Arbitrage strategy.
+
+    Inherits common fields from ``BaseStrategyConfig`` and adds
+    funding-rate-specific thresholds and settings.
 
     All thresholds are expressed as **absolute decimal values per 8-hour
     funding period**.  For example ``0.0003`` means 0.03 % per 8 h.
     """
 
-    # Mode
+    # Override base defaults for funding-arb use
+    LEVERAGE: int = 3
     PAPER_TRADING: bool = True
-    USE_TESTNET: bool = False
-
-    # Account (only needed for live trading)
-    PRIVATE_KEY: str = ""
-    ADDRESS: str = ""
-    ACCOUNT_ADDRESS: Optional[str] = None
-
-    # Capital (paper mode)
-    PAPER_CAPITAL: float = 10_000.0
 
     # Strategy thresholds (per 8h funding period)
     ENTRY_THRESHOLD: float = 0.0003  # 0.03 %
     EXIT_THRESHOLD: float = 0.0001  # 0.01 %
 
-    # Position sizing
-    POSITION_SIZE_PCT: float = 0.10  # 10 % of account per trade
-    LEVERAGE: int = 3
-
     # Limits
     MAX_CONCURRENT_POSITIONS: int = 3
     MAX_HOLD_HOURS: float = 72.0
-    MAX_LOSS_PCT: float = 0.05  # 5 % emergency stop
 
     # Scan interval
     CHECK_INTERVAL: int = 300  # seconds (5 min)
@@ -83,19 +75,45 @@ class FundingArbConfig:
     # Asset filter (empty list ⇒ scan ALL perps)
     COINS: Optional[List[str]] = None
 
-    # Fees (for PnL estimation)
-    TAKER_FEE_PCT: float = 0.0005
-
     # Delta-neutral spot hedge
     SPOT_HEDGE_ENABLED: bool = True
     # Coins that have liquid spot markets on HyperLiquid
-    SPOT_ELIGIBLE_COINS: List[str] = None  # populated in __post_init__
-
-    # Database
-    DATABASE_PATH: str = "trading_bot.db"
+    SPOT_ELIGIBLE_COINS: Optional[List[str]] = None  # populated in __post_init__
 
     # API URLs (set at runtime)
     API_URL: str = "https://api.hyperliquid.xyz"
+
+    # Explicit env vars for FundingArbConfig
+    _ENV_VAR_KEYS: ClassVar[Tuple[str, ...]] = (
+        # Base keys
+        "USE_TESTNET",
+        "PAPER_TRADING",
+        "PRIVATE_KEY",
+        "ADDRESS",
+        "ACCOUNT_ADDRESS",
+        "PAPER_CAPITAL",
+        "ASSET",
+        "TIMEFRAME",
+        "LEVERAGE",
+        "RISK_PER_TRADE_PCT",
+        "POSITION_SIZE_PCT",
+        "MAX_POSITIONS",
+        "MAX_DAILY_TRADES",
+        "MAX_DAILY_LOSS_PCT",
+        "MAX_LOSS_PCT",
+        "EMERGENCY_SHUTDOWN",
+        "MAKER_FEE_PCT",
+        "TAKER_FEE_PCT",
+        "DATABASE_PATH",
+        # Funding-arb-specific keys
+        "ENTRY_THRESHOLD",
+        "EXIT_THRESHOLD",
+        "MAX_CONCURRENT_POSITIONS",
+        "MAX_HOLD_HOURS",
+        "CHECK_INTERVAL",
+        "SPOT_HEDGE_ENABLED",
+        "API_URL",
+    )
 
     def __post_init__(self):
         if self.SPOT_ELIGIBLE_COINS is None:
@@ -105,16 +123,11 @@ class FundingArbConfig:
 
     def validate(self) -> bool:
         """Validate configuration values."""
-        if self.POSITION_SIZE_PCT <= 0 or self.POSITION_SIZE_PCT > 1:
-            raise ValueError("POSITION_SIZE_PCT must be in (0, 1]")
+        super().validate()
         if self.ENTRY_THRESHOLD <= 0:
             raise ValueError("ENTRY_THRESHOLD must be > 0")
         if self.EXIT_THRESHOLD < 0:
             raise ValueError("EXIT_THRESHOLD must be >= 0")
-        if self.LEVERAGE < 1 or self.LEVERAGE > 100:
-            raise ValueError("LEVERAGE must be in [1, 100]")
-        if not self.PAPER_TRADING and not self.PRIVATE_KEY:
-            raise ValueError("PRIVATE_KEY required for live trading")
         return True
 
 
@@ -196,7 +209,19 @@ class FundingRateArbStrategy:
         """
         try:
             info = self._get_info()
-            raw: tuple = await asyncio.to_thread(info.meta_and_asset_ctxs)
+            # Retry with exponential backoff on 429 rate limits
+            raw: Optional[tuple] = None
+            for attempt in range(3):
+                try:
+                    raw = await asyncio.to_thread(info.meta_and_asset_ctxs)
+                    break
+                except Exception as api_exc:
+                    if "429" in str(api_exc) and attempt < 2:
+                        wait = 30 * (2 ** attempt)  # 30s, 60s
+                        logger.warning("HL API 429 — retrying in %ds (attempt %d/3)", wait, attempt + 1)
+                        await asyncio.sleep(wait)
+                    else:
+                        raise
 
             if not raw or len(raw) < 2:
                 logger.warning("meta_and_asset_ctxs returned unexpected format")

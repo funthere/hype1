@@ -8,7 +8,7 @@ position management.
 Strategy:
   - ENTER LONG when fast EMA > slow EMA, ADX > threshold, and pullback confirmed
   - ENTER SHORT when fast EMA < slow EMA, ADX > threshold, and pullback confirmed
-  - EXIT on trend reversal (EMA cross), trailing stop, or max hold time
+  - EXIT on trailing stop, stop loss, take profit, or max hold time
   - Risk managed with ATR-based stops and position sizing
 """
 
@@ -17,12 +17,16 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 from hyperliquid.info import Info
+
+from ..core.base_config import BaseStrategyConfig
+from ..core.config import Side, Trade
 
 logger = logging.getLogger(__name__)
 
@@ -43,27 +47,24 @@ class TrendPositionStatus(Enum):
 
 
 @dataclass
-class TrendFollowingConfig:
-    """Configuration for the Trend Following strategy."""
+class TrendFollowingConfig(BaseStrategyConfig):
+    """Configuration for the Trend Following strategy.
 
-    # Mode
+    Inherits common fields from ``BaseStrategyConfig`` and adds
+    trend-following-specific parameters.
+    """
+
+    # Override base defaults
+    LEVERAGE: int = 3
     PAPER_TRADING: bool = True
-    USE_TESTNET: bool = False
-
-    # Account
-    PRIVATE_KEY: str = ""
-    ADDRESS: str = ""
-    ACCOUNT_ADDRESS: Optional[str] = None
-
-    # Capital
-    PAPER_CAPITAL: float = 10_000.0
+    DATABASE_PATH: str = "trend_following.db"
 
     # Trend detection
     FAST_EMA_PERIOD: int = 9
     SLOW_EMA_PERIOD: int = 21
     TREND_EMA_PERIOD: int = 50      # Higher timeframe trend filter
     ADX_PERIOD: int = 14
-    ADX_THRESHOLD: float = 20.0     # Minimum trend strength
+    ADX_THRESHOLD: float = 30.0     # Minimum trend strength (raised from 20 — avoid weak/ranging signals)
     ATR_PERIOD: int = 14
 
     # Entry filters
@@ -73,8 +74,6 @@ class TrendFollowingConfig:
     VOLUME_MULT: float = 1.2         # Volume must be > MA * this
 
     # Position management
-    POSITION_SIZE_PCT: float = 0.10  # 10% of capital per trade
-    LEVERAGE: int = 3
     ATR_STOP_MULT: float = 2.0       # Stop loss = ATR * this
     ATR_TP_MULT: float = 4.0         # Take profit = ATR * this
     TRAILING_STOP_MULT: float = 2.5  # Trailing stop = ATR * this
@@ -83,7 +82,6 @@ class TrendFollowingConfig:
     # Limits
     MAX_CONCURRENT_POSITIONS: int = 3
     MAX_HOLD_HOURS: float = 168.0    # 7 days
-    MAX_LOSS_PCT: float = 0.05       # 5% emergency stop
 
     # Scan interval
     CHECK_INTERVAL: int = 300        # 5 minutes
@@ -92,24 +90,71 @@ class TrendFollowingConfig:
     # Asset filter
     COINS: Optional[List[str]] = None
 
-    # Fees
-    TAKER_FEE_PCT: float = 0.0005
+    # Blacklist — coins with consistent losses, never trade these
+    BLACKLIST: Tuple[str, ...] = ("VVV", "RUNE")
 
-    # Database
-    DATABASE_PATH: str = "trend_following.db"
+    # Only trade shorts (LONG has 0% win rate in backtest)
+    SHORT_ONLY: bool = False
+
+    # Cooldown — don't re-enter a coin within N hours after closing a position
+    COOLDOWN_HOURS: float = 6.0
+
+    # Time-based progressive trailing stop tightening
+    TIGHTEN_AFTER_HOURS: float = 6.0    # Tighten trailing stop after this many hours
+    TIGHTEN_MULT: float = 0.7           # Multiply ATR multiplier by this after TIGHTEN_AFTER_HOURS
+
+    # RSI filter for entries
+    RSI_PERIOD: int = 14
+    RSI_OVERBOUGHT: float = 70.0         # Don't enter LONG if RSI > this
+    RSI_OVERSOLD: float = 30.0          # Don't enter SHORT if RSI < this
 
     # API URLs
     API_URL: str = "https://api.hyperliquid.xyz"
 
+    # Explicit env vars for TrendFollowingConfig
+    _ENV_VAR_KEYS: ClassVar[Tuple[str, ...]] = (
+        # Base keys
+        "USE_TESTNET",
+        "PAPER_TRADING",
+        "PRIVATE_KEY",
+        "ADDRESS",
+        "ACCOUNT_ADDRESS",
+        "PAPER_CAPITAL",
+        "ASSET",
+        "TIMEFRAME",
+        "LEVERAGE",
+        "RISK_PER_TRADE_PCT",
+        "POSITION_SIZE_PCT",
+        "MAX_POSITIONS",
+        "MAX_DAILY_TRADES",
+        "MAX_DAILY_LOSS_PCT",
+        "MAX_LOSS_PCT",
+        "EMERGENCY_SHUTDOWN",
+        "MAKER_FEE_PCT",
+        "TAKER_FEE_PCT",
+        "DATABASE_PATH",
+        # Trend-following-specific keys
+        "FAST_EMA_PERIOD",
+        "SLOW_EMA_PERIOD",
+        "TREND_EMA_PERIOD",
+        "ADX_PERIOD",
+        "ADX_THRESHOLD",
+        "ATR_PERIOD",
+        "ATR_STOP_MULT",
+        "ATR_TP_MULT",
+        "TRAILING_STOP_MULT",
+        "USE_TRAILING_STOP",
+        "MAX_CONCURRENT_POSITIONS",
+        "MAX_HOLD_HOURS",
+        "CHECK_INTERVAL",
+        "CANDLE_INTERVAL",
+        "API_URL",
+    )
+
     def validate(self) -> bool:
-        if self.POSITION_SIZE_PCT <= 0 or self.POSITION_SIZE_PCT > 1:
-            raise ValueError("POSITION_SIZE_PCT must be in (0, 1]")
+        super().validate()
         if self.FAST_EMA_PERIOD >= self.SLOW_EMA_PERIOD:
             raise ValueError("FAST_EMA_PERIOD must be < SLOW_EMA_PERIOD")
-        if self.LEVERAGE < 1 or self.LEVERAGE > 100:
-            raise ValueError("LEVERAGE must be in [1, 100]")
-        if not self.PAPER_TRADING and not self.PRIVATE_KEY:
-            raise ValueError("PRIVATE_KEY required for live trading")
         return True
 
 
@@ -169,6 +214,9 @@ class TrendFollowingStrategy:
         # Cache candle data per coin
         self._candle_cache: Dict[str, pd.DataFrame] = {}
 
+        # Cooldown tracker: coin -> timestamp of last close
+        self._coin_cooldowns: Dict[str, float] = {}
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -207,6 +255,19 @@ class TrendFollowingStrategy:
     ) -> Optional[str]:
         """Open a new trend following position."""
         try:
+            # Blacklist check
+            if coin in self.config.BLACKLIST:
+                return None
+
+            # SHORT_ONLY mode — reject LONG entries
+            if self.config.SHORT_ONLY and side == TrendPositionSide.LONG:
+                return None
+
+            # Cooldown check — don't re-enter recently closed coins
+            cooldown_end = self._coin_cooldowns.get(coin, 0)
+            if time.time() < cooldown_end:
+                return None
+
             # Check limits
             open_count = sum(
                 1 for p in self._positions.values()
@@ -220,11 +281,25 @@ class TrendFollowingStrategy:
                 if p.coin == coin and p.status == TrendPositionStatus.OPEN:
                     return None
 
-            # Position sizing
+            # Position sizing — volatility-adjusted
             capital = await self._get_available_capital()
             notional = capital * self.config.POSITION_SIZE_PCT
             if notional <= 0 or price <= 0:
                 return None
+
+            # Volatility-adjusted position sizing: scale down when ATR is high
+            # base_size * (median_atr / current_atr), capped at [0.5x, 1.5x]
+            if atr and atr > 0:
+                # Fetch candles to get median ATR across all tracked coins
+                median_atr = await self._get_median_atr()
+                if median_atr and median_atr > 0:
+                    vol_factor = median_atr / atr
+                    vol_factor = max(0.5, min(1.5, vol_factor))  # Cap at 0.5x–1.5x
+                    notional *= vol_factor
+                    logger.debug(
+                        "Vol-adjusted sizing for %s: factor=%.2f (median_atr=%.4f, current_atr=%.4f)",
+                        coin, vol_factor, median_atr, atr,
+                    )
 
             quantity = round(notional / price, 4)
             if quantity <= 0:
@@ -362,6 +437,9 @@ class TrendFollowingStrategy:
             pos.close_price = current_price
             pos.realized_pnl = realized_pnl
 
+            # Set cooldown for this coin to prevent immediate re-entry
+            self._coin_cooldowns[pos.coin] = time.time() + (self.config.COOLDOWN_HOURS * 3600)
+
             if self.db:
                 self.db.log_event(
                     event_type="trend_close",
@@ -378,6 +456,27 @@ class TrendFollowingStrategy:
                         "hold_hours": (pos.close_time - pos.entry_time) / 3600,
                     },
                 )
+
+                # Save trade to trades table
+                try:
+                    fee = abs(pos.notional) * self.config.TAKER_FEE_PCT
+                    trade = Trade(
+                        side=Side(pos.side.value),
+                        entry_price=pos.entry_price,
+                        exit_price=current_price,
+                        quantity=pos.quantity,
+                        entry_time=datetime.fromtimestamp(pos.entry_time, tz=timezone.utc),
+                        exit_time=datetime.fromtimestamp(pos.close_time, tz=timezone.utc),
+                        pnl=realized_pnl,
+                        fees=fee,
+                        notes=f"{pos.coin} {reason}",
+                    )
+                    self.db.save_trade(trade)
+                except Exception as trade_exc:
+                    logger.error("Failed to save trade to DB: %s", trade_exc)
+
+                # Update daily summary
+                self._update_daily_summary()
 
             return True
 
@@ -414,15 +513,24 @@ class TrendFollowingStrategy:
 
             # Update trailing stop
             if self.config.USE_TRAILING_STOP:
+                # Time-based progressive trailing stop tightening
+                # After TIGHTEN_AFTER_HOURS, tighten; after 2x TIGHTEN_AFTER_HOURS, tighten further
+                if hold_hours >= self.config.TIGHTEN_AFTER_HOURS * 2:
+                    trail_mult = self.config.TRAILING_STOP_MULT * self.config.TIGHTEN_MULT * self.config.TIGHTEN_MULT
+                elif hold_hours >= self.config.TIGHTEN_AFTER_HOURS:
+                    trail_mult = self.config.TRAILING_STOP_MULT * self.config.TIGHTEN_MULT
+                else:
+                    trail_mult = self.config.TRAILING_STOP_MULT
+
                 if pos.side == TrendPositionSide.LONG:
                     if current_price > pos.highest_profit_price:
                         pos.highest_profit_price = current_price
-                        new_trail = current_price - pos.atr_at_entry * self.config.TRAILING_STOP_MULT
+                        new_trail = current_price - pos.atr_at_entry * trail_mult
                         pos.trailing_stop = max(pos.trailing_stop, new_trail)
                 else:
                     if current_price < pos.lowest_profit_price:
                         pos.lowest_profit_price = current_price
-                        new_trail = current_price + pos.atr_at_entry * self.config.TRAILING_STOP_MULT
+                        new_trail = current_price + pos.atr_at_entry * trail_mult
                         pos.trailing_stop = min(pos.trailing_stop, new_trail) if pos.trailing_stop != 0 else new_trail
 
             # Check exits
@@ -439,10 +547,6 @@ class TrendFollowingStrategy:
                 elif current_price >= pos.take_profit:
                     should_close = True
                     reason = f"take_profit ({current_price:.2f} >= {pos.take_profit:.2f})"
-                # Trend reversal: check if fast EMA crossed below slow EMA
-                elif await self._check_trend_reversal(pos.coin, TrendPositionSide.LONG):
-                    should_close = True
-                    reason = "trend_reversal"
             else:
                 # SHORT exits
                 if self.config.USE_TRAILING_STOP and current_price >= pos.trailing_stop and pos.trailing_stop != 0:
@@ -454,9 +558,6 @@ class TrendFollowingStrategy:
                 elif current_price <= pos.take_profit:
                     should_close = True
                     reason = f"take_profit ({current_price:.2f} <= {pos.take_profit:.2f})"
-                elif await self._check_trend_reversal(pos.coin, TrendPositionSide.SHORT):
-                    should_close = True
-                    reason = "trend_reversal"
 
             # Max hold time
             if hold_hours > self.config.MAX_HOLD_HOURS:
@@ -573,6 +674,77 @@ class TrendFollowingStrategy:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    async def _get_median_atr(self) -> Optional[float]:
+        """Calculate median ATR across all cached/available coins.
+
+        Used for volatility-adjusted position sizing: compare a coin's
+        current ATR to the market-wide median to scale position size.
+        """
+        try:
+            # Use cached candle data if available; fall back to fetching top coins
+            atr_values = []
+            coins = list(self._candle_cache.keys())
+            if not coins:
+                # Fetch a few major coins for reference
+                coins = ["BTC", "ETH", "SOL", "HYPE", "ARB"]
+
+            for coin in coins:
+                df = self._candle_cache.get(coin)
+                if df is None:
+                    df = await self._fetch_candles(coin)
+                    if df is not None and len(df) >= self.config.ATR_PERIOD:
+                        self._candle_cache[coin] = df
+                if df is not None and len(df) >= self.config.ATR_PERIOD:
+                    atr_series = self._calculate_atr(df, self.config.ATR_PERIOD)
+                    if atr_series is not None and not atr_series.isna().all():
+                        atr_values.append(atr_series.iloc[-1])
+
+            if not atr_values:
+                return None
+            return float(np.median(atr_values))
+        except Exception as exc:
+            logger.debug("Failed to compute median ATR: %s", exc)
+            return None
+
+    def _update_daily_summary(self) -> None:
+        """Recompute and save today's daily summary from closed positions."""
+        if not self.db:
+            return
+        try:
+            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            closed_today = [
+                p for p in self._positions.values()
+                if p.status == TrendPositionStatus.CLOSED
+                and p.close_time is not None
+                and datetime.fromtimestamp(p.close_time, tz=timezone.utc).strftime("%Y-%m-%d") == today_str
+            ]
+            if not closed_today:
+                return
+
+            total_trades = len(closed_today)
+            winning = sum(1 for p in closed_today if p.realized_pnl > 0)
+            losing = sum(1 for p in closed_today if p.realized_pnl < 0)
+            total_pnl = sum(p.realized_pnl for p in closed_today)
+            total_fees = sum(
+                abs(p.notional) * self.config.TAKER_FEE_PCT for p in closed_today
+            )
+            win_rate = (winning / total_trades * 100) if total_trades > 0 else 0
+
+            self.db.save_daily_summary(today_str, {
+                "total_trades": total_trades,
+                "winning_trades": winning,
+                "losing_trades": losing,
+                "total_pnl": round(total_pnl, 4),
+                "total_fees": round(total_fees, 4),
+                "win_rate": round(win_rate, 2),
+                "max_drawdown_pct": 0,
+                "starting_capital": self._paper_capital if self.config.PAPER_TRADING else 0,
+                "ending_capital": (self._paper_capital if self.config.PAPER_TRADING else 0),
+            })
+            logger.info("Updated daily summary for %s: %d trades, PnL=%.4f", today_str, total_trades, total_pnl)
+        except Exception as exc:
+            logger.error("Failed to update daily summary: %s", exc)
+
     def _get_info(self) -> Info:
         if self._info is None:
             self._info = Info(self.config.API_URL, skip_ws=True)
@@ -682,6 +854,15 @@ class TrendFollowingStrategy:
             if side is None:
                 return None
 
+            # RSI filter: don't enter if already overbought/oversold
+            rsi = self._calculate_rsi(close, self.config.RSI_PERIOD)
+            if rsi is not None:
+                current_rsi = rsi.iloc[-1]
+                if side == TrendPositionSide.LONG and current_rsi > self.config.RSI_OVERBOUGHT:
+                    return None  # Already overbought, bad time to go LONG
+                if side == TrendPositionSide.SHORT and current_rsi < self.config.RSI_OVERSOLD:
+                    return None  # Already oversold, bad time to go SHORT
+
             # Pullback filter: price should be close to fast EMA
             if self.config.REQUIRE_PULLBACK:
                 distance = abs(current_price - current_fast) / current_atr
@@ -706,6 +887,7 @@ class TrendFollowingStrategy:
                 "side": side,
                 "price": current_price,
                 "atr": current_atr,
+                "atr_series": atr,  # Full ATR series for volatility-adjusted sizing
                 "confidence": confidence,
                 "fast_ema": current_fast,
                 "slow_ema": current_slow,
@@ -717,27 +899,26 @@ class TrendFollowingStrategy:
             logger.debug("Analysis failed for %s: %s", coin, exc)
             return None
 
-    async def _check_trend_reversal(self, coin: str, original_side: TrendPositionSide) -> bool:
-        """Check if the trend has reversed for an existing position."""
+    @staticmethod
+    def _calculate_rsi(close: pd.Series, period: int = 14) -> Optional[pd.Series]:
+        """Calculate Relative Strength Index (RSI).
+
+        Uses Wilder's smoothing (exponential moving average of gains/losses).
+        """
         try:
-            candles = await self._fetch_candles(coin)
-            if candles is None or len(candles) < self.config.SLOW_EMA_PERIOD:
-                return False
+            delta = close.diff()
+            gain = delta.where(delta > 0, 0.0)
+            loss = (-delta).where(delta < 0, 0.0)
 
-            close = candles["close"]
-            fast_ema = close.ewm(span=self.config.FAST_EMA_PERIOD).mean()
-            slow_ema = close.ewm(span=self.config.SLOW_EMA_PERIOD).mean()
+            # Wilder's smoothing via EMA with alpha = 1/period
+            avg_gain = gain.ewm(alpha=1.0 / period, min_periods=period).mean()
+            avg_loss = loss.ewm(alpha=1.0 / period, min_periods=period).mean()
 
-            current_fast = fast_ema.iloc[-1]
-            current_slow = slow_ema.iloc[-1]
-
-            if original_side == TrendPositionSide.LONG:
-                return current_fast < current_slow  # Reversed to downtrend
-            else:
-                return current_fast > current_slow  # Reversed to uptrend
-
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
+            return rsi
         except Exception:
-            return False
+            return None
 
     @staticmethod
     def _calculate_atr(df: pd.DataFrame, period: int = 14) -> Optional[pd.Series]:
