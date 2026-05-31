@@ -80,6 +80,9 @@ class FundingArbConfig(BaseStrategyConfig):
     # Coins that have liquid spot markets on HyperLiquid
     SPOT_ELIGIBLE_COINS: Optional[List[str]] = None  # populated in __post_init__
 
+    # Safety: reset paper capital if depleted
+    RESET_CAPITAL_IF_DEPLETED: bool = True
+
     # API URLs (set at runtime)
     API_URL: str = "https://api.hyperliquid.xyz"
 
@@ -192,6 +195,7 @@ class FundingRateArbStrategy:
 
         # For paper mode capital tracking
         self._paper_capital: float = config.PAPER_CAPITAL
+        self._initial_capital: float = config.PAPER_CAPITAL
 
         # Cache for SDK Info object (used for meta_and_asset_ctxs)
         self._info: Optional[Info] = None
@@ -309,7 +313,8 @@ class FundingRateArbStrategy:
             )
             if open_count >= self.config.MAX_CONCURRENT_POSITIONS:
                 logger.info(
-                    "Max concurrent positions (%d) reached – skipping %s",
+                    "Max positions reached (%d/%d) – skipping %s",
+                    open_count,
                     self.config.MAX_CONCURRENT_POSITIONS,
                     coin,
                 )
@@ -318,11 +323,27 @@ class FundingRateArbStrategy:
             # Check if we already have an open position for this coin
             for p in self._positions.values():
                 if p.coin == coin and p.status == PositionStatus.OPEN:
-                    logger.debug("Already have open position for %s", coin)
+                    logger.info("Already have position for %s", coin)
                     return None
 
             # Position sizing
             capital = await self._get_available_capital()
+
+            # Guard: paper capital depleted
+            if self.config.PAPER_TRADING and capital <= 0:
+                logger.warning(
+                    "Paper capital depleted: $%.2f", capital
+                )
+                if getattr(self.config, "RESET_CAPITAL_IF_DEPLETED", False):
+                    self._paper_capital = self._initial_capital
+                    capital = self._paper_capital
+                    logger.warning(
+                        "RESET_CAPITAL_IF_DEPLETED=True — capital reset to $%.2f",
+                        capital,
+                    )
+                else:
+                    return None
+
             notional = capital * self.config.POSITION_SIZE_PCT
             if notional <= 0 or mark_px <= 0:
                 logger.warning(
@@ -334,6 +355,10 @@ class FundingRateArbStrategy:
             # Round quantity to 4 decimal places (most perps)
             quantity = round(quantity, 4)
             if quantity <= 0:
+                logger.warning(
+                    "Quantity <= 0 for %s: notional=%.2f mark_px=%.2f",
+                    coin, notional, mark_px,
+                )
                 return None
 
             position_id = str(uuid.uuid4())[:8]
@@ -602,6 +627,14 @@ class FundingRateArbStrategy:
         self._cycle_count += 1
         logger.info("--- Cycle #%d ---", self._cycle_count)
 
+        # Log current paper capital at start of every cycle
+        if self.config.PAPER_TRADING:
+            logger.info(
+                "Paper capital: $%.2f (initial: $%.2f)",
+                self._paper_capital,
+                self._initial_capital,
+            )
+
         # 1. Manage existing positions first
         await self.check_existing_positions()
 
@@ -610,6 +643,34 @@ class FundingRateArbStrategy:
 
         # Sort by absolute funding rate (best opportunities first)
         opportunities.sort(key=lambda o: abs(o["funding_rate"]), reverse=True)
+
+        # Verbose logging: show entry analysis before the loop
+        open_count = sum(
+            1 for p in self._positions.values() if p.status == PositionStatus.OPEN
+        )
+        passing_threshold = [
+            o for o in opportunities
+            if abs(o["funding_rate"]) > self.config.ENTRY_THRESHOLD
+        ]
+        logger.info(
+            "Entry analysis: %d total opportunities | %d pass rate threshold (>%.6f) | "
+            "%d open positions (%d max) | paper_capital=$%.2f",
+            len(opportunities),
+            len(passing_threshold),
+            self.config.ENTRY_THRESHOLD,
+            open_count,
+            self.config.MAX_CONCURRENT_POSITIONS,
+            self._paper_capital if self.config.PAPER_TRADING else 0,
+        )
+        # Log top opportunities for debugging
+        for opp in passing_threshold[:5]:
+            logger.info(
+                "  candidate: %s rate=%.6f (%.4f%%/8h) mark_px=%.4f",
+                opp["coin"],
+                opp["funding_rate"],
+                opp["funding_rate"] * 100,
+                opp["mark_px"],
+            )
 
         # 3. Open new positions where thresholds are met
         for opp in opportunities:
