@@ -11,7 +11,7 @@ Provides common fields and validation logic shared across strategy configs:
 import logging
 import os
 from dataclasses import dataclass, fields
-from typing import ClassVar, List, Optional, Tuple
+from typing import ClassVar, Optional, Tuple
 
 from dotenv import load_dotenv
 
