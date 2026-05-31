@@ -9,8 +9,6 @@ Tests cover:
   - BotConfig from_env() no longer iterates os.environ.items()
 """
 
-import os
-
 import pytest
 
 from src.core.base_config import BaseStrategyConfig

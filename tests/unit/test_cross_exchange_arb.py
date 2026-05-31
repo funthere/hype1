@@ -2,15 +2,12 @@
 Tests for the cross-exchange funding rate arbitrage strategy.
 """
 
-import asyncio
-import logging
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.strategy.cross_exchange_arb import (
-    ArbPosition,
     ArbSide,
     CrossExchangeArbConfig,
     CrossExchangeArbStrategy,
@@ -65,13 +62,13 @@ def mock_hl_info():
 
 
 @pytest.fixture
-def mock_dydx_client():
-    """Mock dYdX client."""
+def mock_binance_client():
+    """Mock Binance client."""
     client = MagicMock()
     client.get_all_funding_rates = AsyncMock(return_value={
-        "BTC-USD": {"ticker": "BTC-USD", "rate_hourly": 0.00005, "oracle_px": 67990},
-        "ETH-USD": {"ticker": "ETH-USD", "rate_hourly": 0.00015, "oracle_px": 3498},
-        "SOL-USD": {"ticker": "SOL-USD", "rate_hourly": -0.00005, "oracle_px": 149.5},
+        "BTC": {"ticker": "BTC-USD", "rate_hourly": 0.00005, "oracle_px": 67990},
+        "ETH": {"ticker": "ETH-USD", "rate_hourly": 0.00015, "oracle_px": 3498},
+        "SOL": {"ticker": "SOL-USD", "rate_hourly": -0.00005, "oracle_px": 149.5},
     })
     client.healthcheck = AsyncMock(return_value=True)
     client.close = AsyncMock()
@@ -143,15 +140,15 @@ class TestFetching:
         assert rates["BTC"]["mark_px"] == 68000.0
 
     @pytest.mark.asyncio
-    async def test_fetch_dydx_rates(self, strategy, mock_dydx_client):
-        strategy.set_dydx_client(mock_dydx_client)
-        rates = await strategy.fetch_dydx_funding_rates()
+    async def test_fetch_dydx_rates(self, strategy, mock_binance_client):
+        strategy.set_binance_client(mock_binance_client)
+        rates = await strategy.fetch_binance_funding_rates()
         assert "BTC" in rates
         assert rates["BTC"]["rate_hourly"] == 0.00005
 
     @pytest.mark.asyncio
     async def test_fetch_dydx_no_client(self, strategy):
-        rates = await strategy.fetch_dydx_funding_rates()
+        rates = await strategy.fetch_binance_funding_rates()
         assert rates == {}
 
 
@@ -162,11 +159,11 @@ class TestFetching:
 
 class TestOpening:
     @pytest.mark.asyncio
-    async def test_open_position_short_hl(self, strategy, mock_dydx_client):
-        strategy.set_dydx_client(mock_dydx_client)
+    async def test_open_position_short_hl(self, strategy, mock_binance_client):
+        strategy.set_binance_client(mock_binance_client)
         pos_id = await strategy.open_position(
             coin="BTC",
-            arb_side=ArbSide.SHORT_HL_LONG_DYDX,
+            arb_side=ArbSide.SHORT_HL_LONG_BINANCE,
             hl_rate=0.00015,
             dydx_rate=0.00005,
             hl_price=68000.0,
@@ -176,18 +173,18 @@ class TestOpening:
         assert pos_id in strategy._positions
         pos = strategy._positions[pos_id]
         assert pos.coin == "BTC"
-        assert pos.arb_side == ArbSide.SHORT_HL_LONG_DYDX
+        assert pos.arb_side == ArbSide.SHORT_HL_LONG_BINANCE
         assert pos.hl_side == "SHORT"
         assert pos.dydx_side == "LONG"
         assert pos.status == PairStatus.OPEN
         assert abs(pos.entry_spread - 0.0001) < 1e-10  # 0.00015 - 0.00005
 
     @pytest.mark.asyncio
-    async def test_open_position_long_hl(self, strategy, mock_dydx_client):
-        strategy.set_dydx_client(mock_dydx_client)
+    async def test_open_position_long_hl(self, strategy, mock_binance_client):
+        strategy.set_binance_client(mock_binance_client)
         pos_id = await strategy.open_position(
             coin="ETH",
-            arb_side=ArbSide.LONG_HL_SHORT_DYDX,
+            arb_side=ArbSide.LONG_HL_SHORT_BINANCE,
             hl_rate=0.0001,
             dydx_rate=0.00015,
             hl_price=3500.0,
@@ -199,42 +196,42 @@ class TestOpening:
         assert pos.dydx_side == "SHORT"
 
     @pytest.mark.asyncio
-    async def test_no_duplicate_position(self, strategy, mock_dydx_client):
-        strategy.set_dydx_client(mock_dydx_client)
+    async def test_no_duplicate_position(self, strategy, mock_binance_client):
+        strategy.set_binance_client(mock_binance_client)
         id1 = await strategy.open_position(
-            "BTC", ArbSide.SHORT_HL_LONG_DYDX,
+            "BTC", ArbSide.SHORT_HL_LONG_BINANCE,
             0.00015, 0.00005, 68000.0, 67990.0,
         )
         id2 = await strategy.open_position(
-            "BTC", ArbSide.SHORT_HL_LONG_DYDX,
+            "BTC", ArbSide.SHORT_HL_LONG_BINANCE,
             0.00015, 0.00005, 68100.0, 68000.0,
         )
         assert id1 is not None
         assert id2 is None  # duplicate, should be rejected
 
     @pytest.mark.asyncio
-    async def test_max_concurrent_positions(self, strategy, mock_dydx_client):
-        strategy.set_dydx_client(mock_dydx_client)
+    async def test_max_concurrent_positions(self, strategy, mock_binance_client):
+        strategy.set_binance_client(mock_binance_client)
         strategy.config.MAX_CONCURRENT_POSITIONS = 1
 
         id1 = await strategy.open_position(
-            "BTC", ArbSide.SHORT_HL_LONG_DYDX,
+            "BTC", ArbSide.SHORT_HL_LONG_BINANCE,
             0.00015, 0.00005, 68000.0, 67990.0,
         )
         id2 = await strategy.open_position(
-            "ETH", ArbSide.LONG_HL_SHORT_DYDX,
+            "ETH", ArbSide.LONG_HL_SHORT_BINANCE,
             0.0001, 0.00015, 3500.0, 3498.0,
         )
         assert id1 is not None
         assert id2 is None  # max reached
 
     @pytest.mark.asyncio
-    async def test_paper_fees_deducted(self, strategy, mock_dydx_client):
-        strategy.set_dydx_client(mock_dydx_client)
+    async def test_paper_fees_deducted(self, strategy, mock_binance_client):
+        strategy.set_binance_client(mock_binance_client)
         initial_capital = strategy._paper_capital
 
         await strategy.open_position(
-            "BTC", ArbSide.SHORT_HL_LONG_DYDX,
+            "BTC", ArbSide.SHORT_HL_LONG_BINANCE,
             0.00015, 0.00005, 68000.0, 67990.0,
         )
         # Fees should have been deducted
@@ -248,10 +245,10 @@ class TestOpening:
 
 class TestClosing:
     @pytest.mark.asyncio
-    async def test_close_position(self, strategy, mock_dydx_client):
-        strategy.set_dydx_client(mock_dydx_client)
+    async def test_close_position(self, strategy, mock_binance_client):
+        strategy.set_binance_client(mock_binance_client)
         pos_id = await strategy.open_position(
-            "BTC", ArbSide.SHORT_HL_LONG_DYDX,
+            "BTC", ArbSide.SHORT_HL_LONG_BINANCE,
             0.00015, 0.00005, 68000.0, 67990.0,
         )
         assert pos_id is not None
@@ -273,10 +270,10 @@ class TestClosing:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_close_already_closed(self, strategy, mock_dydx_client):
-        strategy.set_dydx_client(mock_dydx_client)
+    async def test_close_already_closed(self, strategy, mock_binance_client):
+        strategy.set_binance_client(mock_binance_client)
         pos_id = await strategy.open_position(
-            "BTC", ArbSide.SHORT_HL_LONG_DYDX,
+            "BTC", ArbSide.SHORT_HL_LONG_BINANCE,
             0.00015, 0.00005, 68000.0, 67990.0,
         )
         await strategy.close_position(pos_id, "test")
@@ -291,9 +288,9 @@ class TestClosing:
 
 class TestRunCycle:
     @pytest.mark.asyncio
-    async def test_run_cycle_opens_and_closes(self, strategy, mock_dydx_client):
+    async def test_run_cycle_opens_and_closes(self, strategy, mock_binance_client):
         """Simulate a full cycle where spread triggers entry."""
-        strategy.set_dydx_client(mock_dydx_client)
+        strategy.set_binance_client(mock_binance_client)
 
         await strategy.run_cycle()
         # BTC spread = 0.00015 - 0.00005 = 0.0001 >= ENTRY_THRESHOLD → should open
@@ -322,10 +319,10 @@ class TestStatus:
         assert status["summary"]["closed_count"] == 0
 
     @pytest.mark.asyncio
-    async def test_status_after_open(self, strategy, mock_dydx_client):
-        strategy.set_dydx_client(mock_dydx_client)
+    async def test_status_after_open(self, strategy, mock_binance_client):
+        strategy.set_binance_client(mock_binance_client)
         await strategy.open_position(
-            "BTC", ArbSide.SHORT_HL_LONG_DYDX,
+            "BTC", ArbSide.SHORT_HL_LONG_BINANCE,
             0.00015, 0.00005, 68000.0, 67990.0,
         )
         status = strategy.get_status()
@@ -340,11 +337,11 @@ class TestStatus:
 
 class TestFundingAccumulation:
     @pytest.mark.asyncio
-    async def test_funding_accumulated_for_short_hl(self, strategy, mock_dydx_client):
+    async def test_funding_accumulated_for_short_hl(self, strategy, mock_binance_client):
         """SHORT on HL with positive rate should accumulate funding."""
-        strategy.set_dydx_client(mock_dydx_client)
+        strategy.set_binance_client(mock_binance_client)
         pos_id = await strategy.open_position(
-            "BTC", ArbSide.SHORT_HL_LONG_DYDX,
+            "BTC", ArbSide.SHORT_HL_LONG_BINANCE,
             0.00015, 0.00005, 68000.0, 67990.0,
         )
         pos = strategy._positions[pos_id]
