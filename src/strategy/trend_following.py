@@ -8,7 +8,7 @@ position management.
 Strategy:
   - ENTER LONG when fast EMA > slow EMA, ADX > threshold, and pullback confirmed
   - ENTER SHORT when fast EMA < slow EMA, ADX > threshold, and pullback confirmed
-  - EXIT on trend reversal (EMA cross), trailing stop, or max hold time
+  - EXIT on trailing stop, stop loss, take profit, or max hold time
   - Risk managed with ATR-based stops and position sizing
 """
 
@@ -94,13 +94,19 @@ class TrendFollowingConfig(BaseStrategyConfig):
     BLACKLIST: Tuple[str, ...] = ("VVV", "RUNE")
 
     # Only trade shorts (LONG has 0% win rate in backtest)
-    SHORT_ONLY: bool = True
+    SHORT_ONLY: bool = False
 
     # Cooldown — don't re-enter a coin within N hours after closing a position
     COOLDOWN_HOURS: float = 6.0
 
-    # Trend reversal exit: require minimum hold before allowing reversal exit
-    MIN_HOLD_BEFORE_REVERSAL_HOURS: float = 3.0
+    # Time-based progressive trailing stop tightening
+    TIGHTEN_AFTER_HOURS: float = 6.0    # Tighten trailing stop after this many hours
+    TIGHTEN_MULT: float = 0.7           # Multiply ATR multiplier by this after TIGHTEN_AFTER_HOURS
+
+    # RSI filter for entries
+    RSI_PERIOD: int = 14
+    RSI_OVERBOUGHT: float = 70.0         # Don't enter LONG if RSI > this
+    RSI_OVERSOLD: float = 30.0          # Don't enter SHORT if RSI < this
 
     # API URLs
     API_URL: str = "https://api.hyperliquid.xyz"
@@ -275,11 +281,25 @@ class TrendFollowingStrategy:
                 if p.coin == coin and p.status == TrendPositionStatus.OPEN:
                     return None
 
-            # Position sizing
+            # Position sizing — volatility-adjusted
             capital = await self._get_available_capital()
             notional = capital * self.config.POSITION_SIZE_PCT
             if notional <= 0 or price <= 0:
                 return None
+
+            # Volatility-adjusted position sizing: scale down when ATR is high
+            # base_size * (median_atr / current_atr), capped at [0.5x, 1.5x]
+            if atr and atr > 0:
+                # Fetch candles to get median ATR across all tracked coins
+                median_atr = await self._get_median_atr()
+                if median_atr and median_atr > 0:
+                    vol_factor = median_atr / atr
+                    vol_factor = max(0.5, min(1.5, vol_factor))  # Cap at 0.5x–1.5x
+                    notional *= vol_factor
+                    logger.debug(
+                        "Vol-adjusted sizing for %s: factor=%.2f (median_atr=%.4f, current_atr=%.4f)",
+                        coin, vol_factor, median_atr, atr,
+                    )
 
             quantity = round(notional / price, 4)
             if quantity <= 0:
@@ -493,15 +513,24 @@ class TrendFollowingStrategy:
 
             # Update trailing stop
             if self.config.USE_TRAILING_STOP:
+                # Time-based progressive trailing stop tightening
+                # After TIGHTEN_AFTER_HOURS, tighten; after 2x TIGHTEN_AFTER_HOURS, tighten further
+                if hold_hours >= self.config.TIGHTEN_AFTER_HOURS * 2:
+                    trail_mult = self.config.TRAILING_STOP_MULT * self.config.TIGHTEN_MULT * self.config.TIGHTEN_MULT
+                elif hold_hours >= self.config.TIGHTEN_AFTER_HOURS:
+                    trail_mult = self.config.TRAILING_STOP_MULT * self.config.TIGHTEN_MULT
+                else:
+                    trail_mult = self.config.TRAILING_STOP_MULT
+
                 if pos.side == TrendPositionSide.LONG:
                     if current_price > pos.highest_profit_price:
                         pos.highest_profit_price = current_price
-                        new_trail = current_price - pos.atr_at_entry * self.config.TRAILING_STOP_MULT
+                        new_trail = current_price - pos.atr_at_entry * trail_mult
                         pos.trailing_stop = max(pos.trailing_stop, new_trail)
                 else:
                     if current_price < pos.lowest_profit_price:
                         pos.lowest_profit_price = current_price
-                        new_trail = current_price + pos.atr_at_entry * self.config.TRAILING_STOP_MULT
+                        new_trail = current_price + pos.atr_at_entry * trail_mult
                         pos.trailing_stop = min(pos.trailing_stop, new_trail) if pos.trailing_stop != 0 else new_trail
 
             # Check exits
@@ -518,11 +547,6 @@ class TrendFollowingStrategy:
                 elif current_price >= pos.take_profit:
                     should_close = True
                     reason = f"take_profit ({current_price:.2f} >= {pos.take_profit:.2f})"
-                # Trend reversal: check if fast EMA crossed below slow EMA
-                # Only after minimum hold time to avoid premature exits
-                elif hold_hours >= self.config.MIN_HOLD_BEFORE_REVERSAL_HOURS and await self._check_trend_reversal(pos.coin, TrendPositionSide.LONG):
-                    should_close = True
-                    reason = "trend_reversal"
             else:
                 # SHORT exits
                 if self.config.USE_TRAILING_STOP and current_price >= pos.trailing_stop and pos.trailing_stop != 0:
@@ -534,9 +558,6 @@ class TrendFollowingStrategy:
                 elif current_price <= pos.take_profit:
                     should_close = True
                     reason = f"take_profit ({current_price:.2f} <= {pos.take_profit:.2f})"
-                elif hold_hours >= self.config.MIN_HOLD_BEFORE_REVERSAL_HOURS and await self._check_trend_reversal(pos.coin, TrendPositionSide.SHORT):
-                    should_close = True
-                    reason = "trend_reversal"
 
             # Max hold time
             if hold_hours > self.config.MAX_HOLD_HOURS:
@@ -652,6 +673,38 @@ class TrendFollowingStrategy:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    async def _get_median_atr(self) -> Optional[float]:
+        """Calculate median ATR across all cached/available coins.
+
+        Used for volatility-adjusted position sizing: compare a coin's
+        current ATR to the market-wide median to scale position size.
+        """
+        try:
+            # Use cached candle data if available; fall back to fetching top coins
+            atr_values = []
+            coins = list(self._candle_cache.keys())
+            if not coins:
+                # Fetch a few major coins for reference
+                coins = ["BTC", "ETH", "SOL", "HYPE", "ARB"]
+
+            for coin in coins:
+                df = self._candle_cache.get(coin)
+                if df is None:
+                    df = await self._fetch_candles(coin)
+                    if df is not None and len(df) >= self.config.ATR_PERIOD:
+                        self._candle_cache[coin] = df
+                if df is not None and len(df) >= self.config.ATR_PERIOD:
+                    atr_series = self._calculate_atr(df, self.config.ATR_PERIOD)
+                    if atr_series is not None and not atr_series.isna().all():
+                        atr_values.append(atr_series.iloc[-1])
+
+            if not atr_values:
+                return None
+            return float(np.median(atr_values))
+        except Exception as exc:
+            logger.debug("Failed to compute median ATR: %s", exc)
+            return None
 
     def _update_daily_summary(self) -> None:
         """Recompute and save today's daily summary from closed positions."""
@@ -801,6 +854,15 @@ class TrendFollowingStrategy:
             if side is None:
                 return None
 
+            # RSI filter: don't enter if already overbought/oversold
+            rsi = self._calculate_rsi(close, self.config.RSI_PERIOD)
+            if rsi is not None:
+                current_rsi = rsi.iloc[-1]
+                if side == TrendPositionSide.LONG and current_rsi > self.config.RSI_OVERBOUGHT:
+                    return None  # Already overbought, bad time to go LONG
+                if side == TrendPositionSide.SHORT and current_rsi < self.config.RSI_OVERSOLD:
+                    return None  # Already oversold, bad time to go SHORT
+
             # Pullback filter: price should be close to fast EMA
             if self.config.REQUIRE_PULLBACK:
                 distance = abs(current_price - current_fast) / current_atr
@@ -825,6 +887,7 @@ class TrendFollowingStrategy:
                 "side": side,
                 "price": current_price,
                 "atr": current_atr,
+                "atr_series": atr,  # Full ATR series for volatility-adjusted sizing
                 "confidence": confidence,
                 "fast_ema": current_fast,
                 "slow_ema": current_slow,
@@ -836,27 +899,26 @@ class TrendFollowingStrategy:
             logger.debug("Analysis failed for %s: %s", coin, exc)
             return None
 
-    async def _check_trend_reversal(self, coin: str, original_side: TrendPositionSide) -> bool:
-        """Check if the trend has reversed for an existing position."""
+    @staticmethod
+    def _calculate_rsi(close: pd.Series, period: int = 14) -> Optional[pd.Series]:
+        """Calculate Relative Strength Index (RSI).
+
+        Uses Wilder's smoothing (exponential moving average of gains/losses).
+        """
         try:
-            candles = await self._fetch_candles(coin)
-            if candles is None or len(candles) < self.config.SLOW_EMA_PERIOD:
-                return False
+            delta = close.diff()
+            gain = delta.where(delta > 0, 0.0)
+            loss = (-delta).where(delta < 0, 0.0)
 
-            close = candles["close"]
-            fast_ema = close.ewm(span=self.config.FAST_EMA_PERIOD).mean()
-            slow_ema = close.ewm(span=self.config.SLOW_EMA_PERIOD).mean()
+            # Wilder's smoothing via EMA with alpha = 1/period
+            avg_gain = gain.ewm(alpha=1.0 / period, min_periods=period).mean()
+            avg_loss = loss.ewm(alpha=1.0 / period, min_periods=period).mean()
 
-            current_fast = fast_ema.iloc[-1]
-            current_slow = slow_ema.iloc[-1]
-
-            if original_side == TrendPositionSide.LONG:
-                return current_fast < current_slow  # Reversed to downtrend
-            else:
-                return current_fast > current_slow  # Reversed to uptrend
-
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
+            return rsi
         except Exception:
-            return False
+            return None
 
     @staticmethod
     def _calculate_atr(df: pd.DataFrame, period: int = 14) -> Optional[pd.Series]:
