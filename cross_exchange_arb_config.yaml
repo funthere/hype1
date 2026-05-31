@@ -11,17 +11,12 @@ mode: paper
 paper_capital: 10000.0
 
 # --- Coins to trade ---
+# Only major coins: illiquid alts have wider bid-ask spreads that
+# eat into the thin funding-rate arb margin (~0.1–0.2%).
 coins:
   - BTC
   - ETH
   - SOL
-  - TST
-  - UNI
-  - W
-  - ZEN
-  - XRP
-  - TON
-  - TRUMP
 
 # --- Funding rate thresholds (per-hour basis) ---
 # Both exchanges report per-8h; converted to hourly internally.
@@ -29,7 +24,8 @@ coins:
 # IMPORTANT: round-trip fees are ~0.09% (HL 0.05% + Binance 0.04% per leg, 2 legs).
 # Entry spread MUST exceed fees. 0.001/hr = 0.1% which gives slim edge after fees.
 # Old value 0.000005 was 180x below fee breakeven — guaranteed losses.
-entry_threshold: 0.001        # 0.1 % per hour (must exceed ~0.09% round-trip fees)
+# 0.1%/hr barely covers round-trip fees (~0.09%); raised to 0.2%/hr for buffer.
+entry_threshold: 0.002        # 0.2 % per hour
 exit_threshold:  0.0003       # 0.03 % per hour (close when edge is mostly gone)
 
 # --- Position sizing ---

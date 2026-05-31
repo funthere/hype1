@@ -689,28 +689,38 @@ class CrossExchangeArbStrategy:
     ) -> None:
         """Estimate pro-rata funding accumulated since last check.
 
-        SHORT on HL with positive rate → we receive funding from HL.
-        LONG on dYdX with positive rate → we pay funding on dYdX.
-        Net = HL received - dYdX paid.
+        Funding rates are quoted as the rate longs pay to shorts (perpetual convention).
+        SHORT position: we receive +rate * notional * hours (longs pay us).
+        LONG position:  we pay   -rate * notional * hours (we pay shorts).
         """
         elapsed_hours = (now - pos.last_funding_time) / 3600.0
         if elapsed_hours < 0.01:
             return
 
-        # HL leg funding
+        # HL leg funding — sign based on our side
         if pos.hl_side == "SHORT":
+            # We are short → longs pay us → positive income
             hl_funding = pos.hl_notional * hl_rate * elapsed_hours
         else:
+            # We are long → we pay longs → negative cost
             hl_funding = pos.hl_notional * (-hl_rate) * elapsed_hours
 
-        # dYdX leg funding
+        # dYdX leg funding — sign based on our side
         if pos.dydx_side == "SHORT":
+            # We are short → longs pay us → positive income
             dydx_funding = pos.dydx_notional * dydx_rate * elapsed_hours
         else:
+            # We are long → we pay longs → negative cost
             dydx_funding = pos.dydx_notional * (-dydx_rate) * elapsed_hours
 
-        # Net: what we receive (positive = good for us)
-        net_funding = hl_funding - dydx_funding
+        # Net: sum both legs (each already carries correct sign from side)
+        net_funding = hl_funding + dydx_funding
+
+        logger.debug(
+            "Funding accumulation %s: hl=%.6f dydx=%.6f net=%.6f (elapsed=%.4f hrs)",
+            pos.id, hl_funding, dydx_funding, net_funding, elapsed_hours,
+        )
+
         pos.total_funding_collected += net_funding
         pos.last_funding_time = now
 
