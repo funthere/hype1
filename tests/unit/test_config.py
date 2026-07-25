@@ -130,12 +130,12 @@ class TestBotConfig:
         assert config.PAPER_TRADING is False
         assert config.ASSET == "HYPE"
         assert config.TIMEFRAME == "15m"
-        assert config.LEVERAGE == 5
-        assert config.RISK_PER_TRADE_PCT == 0.08
+        assert config.LEVERAGE == 2
+        assert config.RISK_PER_TRADE_PCT == 0.005
         assert config.TP_ATR_MULTIPLIER == 2.0
         assert config.SL_ATR_MULTIPLIER == 0.4
-        assert config.MAX_POSITIONS == 2
-        assert config.MAX_DAILY_TRADES == 20
+        assert config.MAX_POSITIONS == 1
+        assert config.MAX_DAILY_TRADES == 5
 
     def test_api_url_mainnet(self):
         """Test API URL for mainnet"""

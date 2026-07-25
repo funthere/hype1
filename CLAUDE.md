@@ -99,7 +99,7 @@ PAPER_TRADING=true
 ASSET=HYPE
 TIMEFRAME=15m
 LEVERAGE=5
-RISK_PER_TRADE_PCT=0.08
+RISK_PER_TRADE_PCT=0.005
 ```
 
 The bot loads `.env` automatically via `load_dotenv()` at module import.

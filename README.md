@@ -1,128 +1,115 @@
 # HYPE/USDC Automated Trading Bot
 
-Modular architecture crypto trading bot for Hyperliquid DEX.
+A modular Python trading bot for Hyperliquid DEX, with paper trading, testnet
+operation, strategy analytics, SQLite persistence, and a Streamlit dashboard.
+
+> **Current safety status:** mainnet execution is intentionally source-gated and
+> fails closed. The project supports paper trading and supervised testnet
+> validation while exchange-authoritative lifecycle and release controls are
+> completed. Do not treat an order acknowledgement as a fill.
 
 ## Features
 
-- **Modular Architecture**: Clean separation of concerns for maintainability
-- **Ultra-Optimized Momentum Strategy**: Backtested strategy with strong returns
-- **Paper Trading**: Test strategies risk-free with simulated trades
-- **Testnet Support**: Validate on testnet before mainnet
-- **Real-time Dashboard**: Streamlit web interface for monitoring
-- **Risk Management**: Circuit breaker, daily loss limits, dynamic position sizing
-- **Telegram Notifications**: Trade alerts and updates
-- **Multi-Asset Support**: Trade multiple assets with correlation filtering
-- **Survival Mode**: Conservative risk profiles for production
+- Modular core, exchange, bot, storage, notification, and analytics layers
+- Paper trading with deterministic local fills
+- Testnet support for bounded, supervised experiments
+- SQLite persistence with execution lifecycle state and fill-idempotency ledger
+- Circuit breaker, daily-loss, position-count, and notional risk controls
+- Telegram notifications and Streamlit monitoring dashboard
+- Recovery/reconciliation that treats unavailable exchange state as unknown,
+  never as a flat account
 
-## 🚀 Quick Start
+## Quick start: paper mode
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+python -m pip install --require-hashes -r requirements.lock
+```
 
-# Run paper trading (no credentials needed)
-python3 run_paper_bot.py
-
-# Or use Make
+```bash
 make run-paper
 ```
 
-For trading on testnet or mainnet, configure `.env` with your credentials.
+Copy `.env.example` to `.env` for non-paper configuration. Never commit that
+file or place credentials in source, tests, or logs.
 
-## Configuration
+## Modes
 
-Copy `.env.example` to `.env` and configure:
+| Mode | Status | Purpose |
+| --- | --- | --- |
+| Paper | Supported | Local simulated fills using market data; no order API calls. |
+| Testnet | Supervised | Bounded testnet validation with dedicated credentials. |
+| Mainnet | Blocked | Every mainnet launcher fails closed until release approval. |
 
-```bash
-# For testnet/mainnet
-PRIVATE_KEY=0x...
-ADDRESS=0x...
+## Conservative risk policy
 
-# Trading mode
-USE_TESTNET=false
-PAPER_TRADING=true
+The enforced mainnet policy is deliberately restrictive:
 
-# Strategy overrides (optional)
-ASSET=HYPE
-TIMEFRAME=15m
-LEVERAGE=5
-RISK_PER_TRADE_PCT=0.08
-```
+- 0.5% intended loss at stop per trade; hard maximum 1%
+- 2x leverage hard maximum
+- 2% daily loss target; hard maximum 3%
+- one concurrent position and five trades per day
+- per-position notional limited to 20% of equity and an explicit USD cap
 
-## Running the Bot
+Position size is derived from the account-risk budget and **entry-to-stop
+distance**. Leverage limits margin feasibility; it never multiplies loss at the
+stop. Invalid or uncapped sizes are rejected.
 
-### Paper Trading (Recommended First)
-```bash
-python3 run_paper_bot.py
-# Or: make run-paper
-```
+## Operational recovery
 
-### Testnet Trading
-```bash
-# Configure .env first
-python3 run_testnet_bot.py
-# Or: make run-testnet
-```
+When a live/testnet process stops or reports uncertain execution state:
 
-### Mainnet Trading (Real Money!)
-```bash
-# Configure .env with mainnet credentials
-python3 run_mainnet_bot.py
-# Or: make run-mainnet
-```
+1. Stop new entries.
+2. Preserve the database and logs.
+3. Use the exchange’s positions, open orders, and fills as the authority.
+4. Reconcile client and exchange order IDs before sending another order.
+5. Do not create local P&L from a mid-price if the matching exchange fill is
+   unavailable.
 
-### Web Dashboard
-
-Start the bot in one terminal, then in another:
-```bash
-make dashboard
-```
-
-Open http://localhost:8501 in your browser.
+See [the incident runbook](docs/INCIDENT_RESPONSE.md) and
+[security policy](SECURITY.md) for detailed procedures.
 
 ## Architecture
 
-```
+```text
 src/
-├── core/           # Config, data models, strategy, risk management
-├── exchange/       # API connector, market data feed
-├── bot/            # Main trading bot orchestrator
-├── storage/        # SQLite database for persistence
-├── notifications/   # Telegram alerts
-└── analytics/      # Performance, health, adaptive analytics
+├── core/        # Configuration, risk policy, models, and strategy logic
+├── execution/   # Typed lifecycle, gateway contract, and test gateway
+├── exchange/    # Hyperliquid adapter and market-data feed
+├── bot/         # Orchestration, reconciliation, and accounting
+├── storage/     # SQLite persistence and idempotent execution-fill ledger
+├── notifications/
+└── analytics/
 ```
 
-See `CLAUDE.md` for detailed architecture documentation.
+The lifecycle boundary distinguishes order submission from execution: a live
+exit becomes a terminal trade only after a matching fill and a successful flat
+exchange-position snapshot agree.
 
 ## Testing
 
 ```bash
-# Run tests
-make test
-
-# Run with coverage
-pytest --cov=src --cov-report=html
+make lint
 ```
-
-## Development
 
 ```bash
-# Install dev dependencies
-make install
-
-# Lint code
-make lint
-
-# Format code
-make format
+python -m pytest tests/ -m "not external" -v --cov=src --cov-branch
 ```
 
-## Documentation
+Tests are marked `unit`, `integration`, `contract`, or `external`. External
+smoke checks require a protected dedicated testnet account and never run in
+normal pull-request CI.
 
-- `CLAUDE.md` - Architecture and development guide
-- `MIGRATION_ANALYSIS.md` - Analysis of modular vs legacy architecture
-- `MODULAR_README.md` - Detailed modular architecture docs
+## Development and contribution
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) documents the test, migration, and
+  execution-change requirements.
+- [SECURITY.md](SECURITY.md) explains secret hygiene and vulnerability response.
+- `requirements.in` is the reviewed dependency manifest. Generate a
+  hash-pinned `requirements.lock` before a release using `pip-compile`.
+- See `CLAUDE.md` for repository architecture and commands.
 
 ## Disclaimer
 
-This is a trading bot for educational purposes. Past performance does not guarantee future results. Always test thoroughly and use proper risk management in live trading.
+This repository is educational and experimental. Trading can lose all deployed
+capital. Test strategies in paper mode and supervised testnet environments; do
+not enable mainnet operation without an independently reviewed release.

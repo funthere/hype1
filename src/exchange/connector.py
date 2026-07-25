@@ -11,6 +11,7 @@ from hyperliquid.info import Info
 from hyperliquid.exchange import Exchange
 
 from ..core.config import BotConfig, Side
+from ..execution import OrderRequest, OrderSubmission, PositionRead, SubmissionStatus
 from .retry import retry_with_backoff
 
 logger = logging.getLogger(__name__)
@@ -59,26 +60,106 @@ class HyperliquidAPI:
             logger.error(f"Connection check failed: {e}")
             return False
 
-    async def get_asset_index(self) -> int:
-        """Get asset index from exchange metadata"""
-        if self._asset_index is not None:
+    async def get_asset_index(self, coin: Optional[str] = None) -> int:
+        """Get an asset index from exchange metadata.
+
+        The configured asset remains cached; request-scoped assets are looked up
+        independently so multi-asset callers cannot accidentally trade HYPE.
+        """
+        target_coin = coin or self.config.ASSET
+        if target_coin == self.config.ASSET and self._asset_index is not None:
             return self._asset_index
 
         try:
             meta_data = await asyncio.to_thread(self.info.meta)
-
-            for i, asset in enumerate(meta_data["universe"]):
-                if asset["name"] == self.config.ASSET:
-                    self._asset_index = i
-                    self.config.ASSET_INDEX = i
-                    logger.info(f"Found {self.config.ASSET} at index {i}")
-                    return i
-
-            raise ValueError(f"{self.config.ASSET} not found in universe")
-
-        except Exception as e:
-            logger.error(f"Failed to get asset index: {e}")
+            for index, asset in enumerate(meta_data["universe"]):
+                if asset["name"] == target_coin:
+                    if target_coin == self.config.ASSET:
+                        self._asset_index = index
+                        self.config.ASSET_INDEX = index
+                    logger.info("Found %s at index %s", target_coin, index)
+                    return index
+            raise ValueError(f"{target_coin} not found in universe")
+        except asyncio.CancelledError:
             raise
+        except Exception as exc:
+            logger.error("Failed to get asset index for %s: %s", target_coin, exc)
+            raise
+
+    @staticmethod
+    def _order_type(order_type: str) -> Dict:
+        """Map supported internal time-in-force names to SDK payloads."""
+        if order_type == "post_only":
+            return {"limit": {"tif": "Alo"}}
+        if order_type == "ioc":
+            return {"limit": {"tif": "Ioc"}}
+        return {"limit": {"tif": "Gtc"}}
+
+    @staticmethod
+    def _extract_order_id(response: Dict) -> Optional[int]:
+        """Extract an order id from known Hyperliquid acknowledgement shapes."""
+        for candidate in (
+            response.get("oid"),
+            response.get("order", {}).get("oid"),
+            response.get("data", {}).get("oid"),
+        ):
+            if candidate is not None:
+                try:
+                    return int(candidate)
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    async def submit_order(self, request: OrderRequest) -> OrderSubmission:
+        """Submit one idempotent order without treating acknowledgement as a fill.
+
+        Order writes are intentionally *not* retried. A transport error after a
+        write is ambiguous; callers must reconcile using the stable client ID
+        before issuing another request.
+        """
+        try:
+            await self.get_asset_index(request.coin)
+            raw = await asyncio.to_thread(
+                self.exchange.order,
+                coin=request.coin,
+                is_buy=request.side == Side.LONG,
+                sz=request.quantity,
+                limit_px=request.price,
+                order_type=self._order_type(request.order_type),
+                reduce_only=request.reduce_only,
+                cloid=request.client_order_id or None,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(
+                "Order submission outcome unknown for %s: %s",
+                request.client_order_id,
+                exc,
+            )
+            return OrderSubmission(
+                status=SubmissionStatus.UNKNOWN,
+                client_order_id=request.client_order_id,
+                message=str(exc),
+            )
+
+        response = raw.get("response", {}) if isinstance(raw, dict) else {}
+        if isinstance(raw, dict) and raw.get("status") == "ok":
+            return OrderSubmission(
+                status=SubmissionStatus.ACCEPTED,
+                client_order_id=request.client_order_id,
+                exchange_order_id=self._extract_order_id(response),
+                raw=response,
+            )
+
+        message = response.get("error", "Unknown exchange rejection")
+        logger.error("Order rejected for %s: %s", request.client_order_id, message)
+        return OrderSubmission(
+            status=SubmissionStatus.REJECTED,
+            client_order_id=request.client_order_id,
+            message=message,
+            raw=response,
+        )
 
     async def place_order(
         self,
@@ -88,65 +169,36 @@ class HyperliquidAPI:
         reduce_only: bool = False,
         cloid: Optional[str] = None,
         order_type: str = "limit",
+        coin: Optional[str] = None,
     ) -> Dict:
+        """Compatibility wrapper returning the legacy acknowledgement mapping.
+
+        New execution lifecycle code should use :meth:`submit_order`; neither
+        interface interprets an accepted order as an executed fill.
         """
-        Place order on the exchange.
-
-        Args:
-            side: Order side (LONG/SHORT)
-            price: Limit price
-            quantity: Order quantity in base asset
-            reduce_only: Whether to reduce existing position
-            cloid: Client order ID for idempotency
-            order_type: "limit" (GTC), "post_only" (Post-Only/Alon), "ioc" (IOC)
-
-        Returns:
-            Dict with order result
-        """
-        try:
-            await self.get_asset_index()
-
-            # Build order_type parameter for HyperLiquid SDK
-            if order_type == "post_only":
-                hl_order_type = {"limit": {"tif": "Alo"}}
-            elif order_type == "ioc":
-                hl_order_type = {"limit": {"tif": "Ioc"}}
-            else:
-                hl_order_type = {"limit": {"tif": "Gtc"}}
-
-            async def _place():
-                return await asyncio.to_thread(
-                    self.exchange.order,
-                    coin=self.config.ASSET,
-                    is_buy=(side == Side.LONG),
-                    sz=quantity,
-                    limit_px=price,
-                    order_type=hl_order_type,
-                    reduce_only=reduce_only,
-                    cloid=cloid,
-                )
-
-            order_result = await retry_with_backoff(_place)
-
-            if order_result.get("status") == "ok":
-                return {
-                    "status": "ok",
-                    "response": order_result.get("response", {}),
-                }
-            else:
-                error_msg = order_result.get("response", {}).get(
-                    "error", "Unknown error"
-                )
-                logger.error(f"Order failed: {error_msg}")
-                return {"status": "error", "msg": error_msg}
-
-        except Exception as e:
-            logger.error(f"Order placement exception: {e}")
-            return {"status": "error", "msg": str(e)}
+        request = OrderRequest(
+            coin=coin or self.config.ASSET,
+            side=side,
+            quantity=quantity,
+            price=price,
+            client_order_id=cloid or "",
+            reduce_only=reduce_only,
+            order_type=order_type,
+        )
+        submission = await self.submit_order(request)
+        if submission.status == SubmissionStatus.ACCEPTED:
+            response = dict(submission.raw)
+            if submission.exchange_order_id is not None:
+                response.setdefault("oid", submission.exchange_order_id)
+            return {"status": "ok", "response": response}
+        if submission.status == SubmissionStatus.UNKNOWN:
+            return {"status": "unknown", "msg": submission.message}
+        return {"status": "error", "msg": submission.message}
 
     async def cancel_order(self, oid: int) -> Dict:
         """Cancel order by order ID"""
         try:
+
             async def _cancel():
                 return await asyncio.to_thread(
                     self.exchange.cancel, coin=self.config.ASSET, oid=oid
@@ -192,6 +244,7 @@ class HyperliquidAPI:
     async def get_open_orders(self) -> List[Dict]:
         """Get all open orders for the asset"""
         try:
+
             async def _get_orders():
                 return await asyncio.to_thread(self.info.open_orders, self.config.ASSET)
 
@@ -201,33 +254,38 @@ class HyperliquidAPI:
             logger.error(f"Failed to get open orders: {e}")
             return []
 
-    async def get_positions(self) -> List[Dict]:
-        """Get current positions from exchange"""
+    async def get_positions(self) -> PositionRead:
+        """Read current exchange positions without masking a failed snapshot as flat.
+
+        A caller must check ``available`` before making a destructive lifecycle
+        decision. ``PositionRead`` remains iterable for temporary legacy-call
+        compatibility.
+        """
+        if not self.address:
+            return PositionRead.unavailable("Missing account address")
+
         try:
-            if not self.address:
-                return []
 
             async def _get_positions():
                 return await asyncio.to_thread(self.info.user_state, self.address)
 
             user_state = await retry_with_backoff(_get_positions)
-            asset_positions = user_state.get("assetPositions", [])
-
             positions = []
-            for pos_data in asset_positions:
+            for pos_data in user_state.get("assetPositions", []):
                 position = pos_data.get("position", {})
-                if position:  # Only include non-empty positions
+                if position:
                     positions.append(position)
-
-            return positions
-
-        except Exception as e:
-            logger.error(f"Failed to get positions: {e}")
-            return []
+            return PositionRead.success(positions)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("Failed to read exchange positions: %s", exc)
+            return PositionRead.unavailable(str(exc))
 
     async def get_mids(self) -> Dict:
         """Get current mid prices for all assets"""
         try:
+
             async def _get_mids():
                 return await asyncio.to_thread(self.info.all_mids)
 
@@ -248,6 +306,7 @@ class HyperliquidAPI:
         """
         target_coin = coin or self.config.ASSET
         try:
+
             async def _get_funding():
                 return await asyncio.to_thread(self.info.meta_and_asset_ctxs)
 
@@ -321,9 +380,7 @@ class HyperliquidAPI:
             result = await retry_with_backoff(_close)
 
             if result.get("status") == "ok":
-                logger.info(
-                    f"Closed {side.value} position: {quantity} @ {price}"
-                )
+                logger.info(f"Closed {side.value} position: {quantity} @ {price}")
                 return {"status": "ok", "response": result.get("response", {})}
             else:
                 error_msg = result.get("response", {}).get("error", "Unknown error")
@@ -425,9 +482,9 @@ class HyperliquidAPI:
         """Get last connection error"""
         return self._last_error
 
-    # ------------------------------------------------------------------ 
+    # ------------------------------------------------------------------
     # Spot market methods (for funding arb delta-neutral hedge)
-    # ------------------------------------------------------------------ 
+    # ------------------------------------------------------------------
 
     async def place_spot_order(
         self,

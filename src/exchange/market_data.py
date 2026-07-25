@@ -64,8 +64,13 @@ class MarketDataFeed:
                 # Subscribe to market data
                 await self._subscribe(self._ws)
 
-                # Listen for messages
+                # Listen for messages. A normal return while still connected
+                # means a test/dummy transport completed cleanly; returning
+                # avoids reconnecting forever. A closed transport flips
+                # ``connected`` and proceeds through the retry path below.
                 await self._listen()
+                if self.connected:
+                    return
 
             except Exception as e:
                 self.connected = False

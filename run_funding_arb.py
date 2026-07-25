@@ -35,6 +35,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from src.core.config import BotConfig
+from src.core.safety import require_mainnet_release_approval
 from src.exchange.connector import HyperliquidAPI
 from src.storage.database import DatabaseManager
 from src.strategy.funding_rate_arb import (
@@ -167,8 +168,13 @@ def build_config(args: argparse.Namespace) -> FundingArbConfig:
         API_URL=api_url,
     )
 
-    # Live mode needs a valid key
+    # Live mode is disabled until this strategy adopts the shared lifecycle.
     if not paper_mode:
+        try:
+            require_mainnet_release_approval("Funding-arbitrage strategy")
+        except RuntimeError as exc:
+            logger.critical("%s", exc)
+            raise SystemExit(1) from exc
         if not config.PRIVATE_KEY:
             logger.error("Live mode requires PRIVATE_KEY in .env or environment")
             sys.exit(1)

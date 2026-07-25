@@ -22,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src.core.config import BotConfig
+from src.core.safety import require_mainnet_release_approval
 from src.bot.trading_bot import TradingBot
 
 # Configure logging
@@ -47,7 +48,7 @@ def create_mainnet_config():
     # Trading parameters
     config.ASSET = "HYPE"
     config.TIMEFRAME = "15m"
-    config.LEVERAGE = 5
+    config.LEVERAGE = 2
 
     # Strategy Parameters
     config.ROC_SHORT = 1
@@ -57,18 +58,18 @@ def create_mainnet_config():
     config.EMA_TREND_FILTER = 20
 
     # Risk Management
-    config.RISK_PER_TRADE_PCT = 0.08
+    config.RISK_PER_TRADE_PCT = 0.005
     config.TP_ATR_MULTIPLIER = 2.0
     config.SL_ATR_MULTIPLIER = 0.4
-    config.MAX_POSITIONS = 2
-    config.MAX_DAILY_TRADES = 20
+    config.MAX_POSITIONS = 1
+    config.MAX_DAILY_TRADES = 5
 
     # Order Settings
     config.ORDER_TYPE = "limit"
     config.MIN_ORDER_SIZE = 10
 
     # Safety
-    config.MAX_DAILY_LOSS_PCT = 0.15
+    config.MAX_DAILY_LOSS_PCT = 0.02
 
     # Fees
     config.MAKER_FEE_PCT = -0.0002
@@ -78,39 +79,19 @@ def create_mainnet_config():
 
 
 async def run_mainnet_bot():
-    """Run the mainnet trading bot"""
+    """Run the mainnet trading bot."""
+    try:
+        require_mainnet_release_approval("Primary trading bot")
+    except RuntimeError as exc:
+        logger.critical("%s", exc)
+        return
+
     print("""
 ╔══════════════════════════════════════════════════════════════════╗
-║         ⚠️  HYPE/USDC MAINNET TRADING BOT ⚠️                   ║
-║         Modular Architecture Edition                             ║
+║            MAINNET EXECUTION RELEASE-GATED                      ║
 ╠══════════════════════════════════════════════════════════════════╣
-║  ⚠️  WARNING: THIS USES REAL MONEY!                          ║
-║  ⚠️  EXTREME CAUTION REQUIRED!                                ║
-║                                                                ║
-║  MODE: MAINNET TRADING                                        ║
-║  - Real orders on mainnet exchange                             ║
-║  - REAL MONEY IS AT RISK!                                     ║
-║  - Past performance does not guarantee future results           ║
-║                                                                ║
-║  STRATEGY:                                                     ║
-║  - Ultra-Optimized Momentum                                    ║
-║  - 8% risk per trade, 5x leverage, max 2 positions            ║
-║                                                                ║
-║  SAFETY MEASURES:                                             ║
-║  - Start with paper trading to validate strategy                ║
-║  - Use testnet before mainnet                                  ║
-║  - Monitor closely for first few days                           ║
-║  - Set appropriate daily loss limits                           ║
-║                                                                ║
-║  REQUIREMENTS:                                                 ║
-║  - .env file with PRIVATE_KEY and ADDRESS                      ║
-║  - Mainnet funds on Hyperliquid                               ║
-║  - Accept full responsibility for losses                        ║
-║                                                                ║
-║  WEB DASHBOARD:                                                ║
-║  1. Start the bot (this script)                               ║
-║  2. In another terminal: make dashboard                        ║
-║  3. Open http://localhost:8501 in your browser                ║
+║ This runner is only reachable after source-controlled approval. ║
+║ Policy: 0.5% stop risk, 2x leverage, one position.             ║
 ╚══════════════════════════════════════════════════════════════════╝
     """)
 

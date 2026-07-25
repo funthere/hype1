@@ -5,10 +5,17 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short --strict-markers"
 markers = [
-    "unit: Unit tests",
-    "integration: Integration tests",
+    "unit: Unit tests without external I/O",
+    "integration: Deterministic integration tests (SQLite and scripted adapters)",
+    "contract: Exchange gateway contract tests",
+    "external: Protected manual testnet smoke tests",
     "slow: Slow running tests"
 ]
+
+[tool.ruff.lint]
+# Enforce syntax, undefined-name, and import correctness while legacy style
+# cleanup is completed incrementally in focused modules.
+select = ["E4", "E7", "E9", "F"]
 
 [tool.coverage.run]
 source = ["src"]

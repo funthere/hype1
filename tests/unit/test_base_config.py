@@ -35,12 +35,12 @@ class TestBaseStrategyConfigDefaults:
         assert cfg.PAPER_CAPITAL == 10_000.0
         assert cfg.ASSET == "HYPE"
         assert cfg.TIMEFRAME == "15m"
-        assert cfg.LEVERAGE == 5
-        assert cfg.RISK_PER_TRADE_PCT == 0.08
+        assert cfg.LEVERAGE == 2
+        assert cfg.RISK_PER_TRADE_PCT == 0.005
         assert cfg.POSITION_SIZE_PCT == 0.10
-        assert cfg.MAX_POSITIONS == 2
-        assert cfg.MAX_DAILY_TRADES == 20
-        assert cfg.MAX_DAILY_LOSS_PCT == 0.15
+        assert cfg.MAX_POSITIONS == 1
+        assert cfg.MAX_DAILY_TRADES == 5
+        assert cfg.MAX_DAILY_LOSS_PCT == 0.02
         assert cfg.MAX_LOSS_PCT == 0.05
         assert cfg.EMERGENCY_SHUTDOWN is False
         assert cfg.MAKER_FEE_PCT == -0.0002
@@ -173,9 +173,7 @@ class TestBaseValidation:
             cfg.validate()
 
     def test_validate_private_key_with_live(self):
-        cfg = BaseStrategyConfig(
-            PAPER_TRADING=False, PRIVATE_KEY="0x" + "a" * 64
-        )
+        cfg = BaseStrategyConfig(PAPER_TRADING=False, PRIVATE_KEY="0x" + "a" * 64)
         assert cfg.validate() is True
 
     def test_validate_negative_risk(self):
@@ -257,7 +255,7 @@ class TestBotConfigInheritance:
         cfg = BotConfig()
         # BotConfig overrides PAPER_TRADING to False
         assert cfg.PAPER_TRADING is False
-        assert cfg.LEVERAGE == 5
+        assert cfg.LEVERAGE == 2
         assert cfg.ASSET == "HYPE"
 
     def test_botconfig_from_env(self, monkeypatch):

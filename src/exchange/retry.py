@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # Retryable error types
 # ------------------------------------------------------------------ #
 # Network / transport layer
-RETRYABLE_ERRORS: Tuple[Type[BaseException], ...] = (
+RETRYABLE_ERRORS: Tuple[Type[Exception], ...] = (
     ConnectionError,
     ConnectionResetError,
     ConnectionAbortedError,
@@ -33,7 +33,7 @@ RETRYABLE_HTTP_CODES = (429, 500, 502, 503, 504)
 class RetryableError(Exception):
     """Wrapper to explicitly mark an error as retryable."""
 
-    def __init__(self, original: BaseException):
+    def __init__(self, original: Exception):
         self.original = original
         super().__init__(str(original))
 
@@ -41,12 +41,12 @@ class RetryableError(Exception):
 class NonRetryableError(Exception):
     """Wrapper to explicitly mark an error as non-retryable."""
 
-    def __init__(self, original: BaseException):
+    def __init__(self, original: Exception):
         self.original = original
         super().__init__(str(original))
 
 
-def is_retryable(exc: BaseException) -> bool:
+def is_retryable(exc: Exception) -> bool:
     """Determine if an exception is transient and worth retrying.
 
     Checks against:
@@ -106,7 +106,7 @@ def calculate_delay(
     Returns:
         Delay in seconds.
     """
-    delay = min(base_delay * (2 ** attempt), max_delay)
+    delay = min(base_delay * (2**attempt), max_delay)
     if jitter:
         delay += random.uniform(0, base_delay * 0.5)
     return delay
@@ -142,23 +142,24 @@ async def retry_with_backoff(
     Raises:
         The last encountered exception if all retries are exhausted.
     """
-    last_exc: BaseException = RuntimeError("unreachable")
+    last_exc: Exception = RuntimeError("unreachable")
 
     for attempt in range(max_retries + 1):
         try:
             return await fn(*args, **kwargs)
-        except BaseException as exc:
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
             last_exc = exc
 
+            function_name = getattr(fn, "__name__", None) or type(fn).__name__
             if not is_retryable(exc):
-                logger.debug(
-                    f"Non-retryable error in {fn.__name__}: {exc}"
-                )
+                logger.debug(f"Non-retryable error in {function_name}: {exc}")
                 raise
 
             if attempt >= max_retries:
                 logger.warning(
-                    f"Retry exhausted for {fn.__name__} after "
+                    f"Retry exhausted for {function_name} after "
                     f"{max_retries} retries: {exc}"
                 )
                 raise
@@ -167,7 +168,7 @@ async def retry_with_backoff(
                 attempt, base_delay=base_delay, max_delay=max_delay, jitter=jitter
             )
             logger.warning(
-                f"Retry {attempt + 1}/{max_retries} for {fn.__name__} "
+                f"Retry {attempt + 1}/{max_retries} for {function_name} "
                 f"after {delay:.2f}s — error: {exc}"
             )
             await asyncio.sleep(delay)

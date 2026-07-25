@@ -38,6 +38,8 @@ def mock_all():
                             api_instance.cancel_all_orders = AsyncMock(
                                 return_value={"status": "ok"}
                             )
+                            api_instance.get_positions = AsyncMock(return_value=[])
+                            api_instance.get_recent_fills = AsyncMock(return_value=[])
                             mock_api.return_value = api_instance
 
                             md_instance = Mock()
@@ -63,6 +65,8 @@ def mock_all():
                             db_instance.close = Mock()
                             db_instance.save_bot_state = Mock(return_value=1)
                             db_instance.load_bot_state = Mock(return_value=None)
+                            db_instance.close_position_by_uid = Mock(return_value=True)
+                            db_instance.record_execution_fill = Mock(return_value=True)
                             mock_db.return_value = db_instance
 
                             tg_instance = Mock()
@@ -489,7 +493,9 @@ class TestTradingBotClosePosition:
         assert trade.exit_price == 105.0
         expected_pnl = (105.0 - 100.0) * 10.0
         # Entry: maker fee (post-only), Exit: taker fee (IOC)
-        expected_fees = 100.0 * 10.0 * (bot.config.MAKER_FEE_PCT + bot.config.TAKER_FEE_PCT)
+        expected_fees = (
+            100.0 * 10.0 * (bot.config.MAKER_FEE_PCT + bot.config.TAKER_FEE_PCT)
+        )
         assert trade.pnl == pytest.approx(expected_pnl - expected_fees)
         assert trade.fees == pytest.approx(expected_fees)
 
@@ -1020,13 +1026,12 @@ class TestPositionReconciliation:
         bot.api.get_positions.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_reconcile_detects_missing_exchange_position(self, mock_all):
-        """Local position not on exchange → should close it."""
+    async def test_reconcile_marks_missing_position_externally_closed(self, mock_all):
+        """A confirmed flat snapshot never causes a duplicate reduce-only exit."""
         bot = create_bot(mocks=mock_all)
         bot.config.PAPER_TRADING = False
         bot.config.ASSET = "HYPE"
-        bot.api.get_positions = AsyncMock(return_value=[])  # nothing on exchange
-        bot.api.get_mids = AsyncMock(return_value={"HYPE": 100.0})
+        bot.api.get_positions = AsyncMock(return_value=[])
 
         pos = Position(
             side=Side.LONG,
@@ -1040,8 +1045,10 @@ class TestPositionReconciliation:
         bot.positions = [pos]
 
         with patch.object(bot, "_close_position", new_callable=AsyncMock) as mock_close:
-            await bot._reconcile_positions()
-            mock_close.assert_called_once_with(pos, 100.0, "RECONCILE_MISSING")
+            assert await bot._reconcile_positions() is True
+            mock_close.assert_not_called()
+        assert pos.execution_state == "externally_closed"
+        assert pos not in bot.positions
 
     @pytest.mark.asyncio
     async def test_reconcile_restores_untracked_exchange_position(self, mock_all):

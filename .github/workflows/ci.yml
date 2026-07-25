@@ -5,9 +5,10 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
 
 jobs:
-  lint:
+  quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,9 +16,19 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements.txt
-      - run: pip install ruff
-      - run: ruff check src/ tests/ run_*.py bot_api_server.py hype_dashboard.py
+      - name: Install locked dependencies
+        run: python -m pip install --require-hashes -r requirements.lock
+      - name: Verify dependency manifests
+        run: |
+          test -f requirements.in
+          test -f requirements.lock
+          grep -q "pip-compile" requirements.lock
+      - name: Lint
+        run: ruff check src/ tests/ run_*.py bot_api_server.py hype_dashboard.py
+      - name: Format check
+        run: ruff format --check src/ tests/ run_*.py bot_api_server.py hype_dashboard.py
+      - name: Dependency audit
+        run: pip-audit -r requirements.txt
 
   test:
     runs-on: ubuntu-latest
@@ -27,5 +38,26 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements.txt
-      - run: python3 -m pytest tests/unit/ -v --cov=src --cov-report=term-missing
+      - name: Install locked dependencies
+        run: python -m pip install --require-hashes -r requirements.lock
+      - name: Run deterministic test suites
+        run: >-
+          python -m pytest tests/ -m "not external" -v
+          --cov=src --cov-branch --cov-report=term-missing --cov-report=xml
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+          if-no-files-found: error
+
+  testnet-smoke:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: protected-testnet
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release-only smoke placeholder
+        run: |
+          echo "Run bounded testnet lifecycle smoke tests with dedicated credentials."
+          echo "Mainnet execution remains source-gated until this workflow is implemented."

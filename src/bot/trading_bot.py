@@ -8,12 +8,14 @@ import os
 import signal
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
+from uuid import uuid4
 
 from ..core.config import BotConfig, Side, Position, Trade, OrderStatus
 from ..core.strategy import StrategyEngine, RiskManager
 from ..core.survival_risk import SurvivalRiskManager
 from ..exchange.connector import HyperliquidAPI
 from ..exchange.market_data import MarketDataFeed
+from ..execution import PositionRead
 from ..storage.database import DatabaseManager
 from ..notifications.telegram import TelegramNotifier
 from ..analytics.adaptive import AdaptiveParameterManager
@@ -212,6 +214,26 @@ class TradingBot:
             await self._shutdown("Connection failed")
             return
 
+        # Live recovery must establish exchange state before strategy management.
+        if not self.config.PAPER_TRADING:
+            recovered = await self._reconcile_positions()
+            if not recovered:
+                logger.error(
+                    "No authoritative position snapshot; refusing to start live loop"
+                )
+                await self._shutdown("Initial reconciliation unavailable")
+                return
+
+        # Recovered local state is only a candidate. A live bot must establish
+        # authoritative exchange state before it evaluates signals or exits.
+        if not self.config.PAPER_TRADING:
+            if not await self._reconcile_positions():
+                logger.error(
+                    "Initial reconciliation unavailable; refusing live startup"
+                )
+                await self._shutdown("Initial reconciliation unavailable")
+                return
+
         # Get initial price
         mids = await self.api.get_mids()
         logger.info(
@@ -250,11 +272,11 @@ class TradingBot:
                 # Check circuit breaker cooldown
                 await self._check_circuit_breaker_cooldown()
 
-                # Check exits on open positions (always check)
-                await self._check_position_exits()
-
                 # Periodic position reconciliation with exchange (live mode only)
                 await self._maybe_reconcile_positions()
+
+                # Check exits on managed, confirmed positions only.
+                await self._check_position_exits()
 
                 # Process new signals (only if not paused)
                 if not self._is_paused and self.market_data.current_candle:
@@ -356,14 +378,17 @@ class TradingBot:
         self._last_signal_time = datetime.now()
 
     async def _place_entry_order(self, signal: Dict):
-        """Place entry order based on signal"""
+        """Create local exposure only after a paper fill or confirmed live fill.
+
+        A live post-only acknowledgement remains ``PENDING_ENTRY`` in SQLite
+        and is deliberately excluded from strategy management until the next
+        authoritative exchange reconciliation verifies a filled position.
+        """
         side = signal["action"]
         entry_price = signal["entry_price"]
         quantity = signal["quantity"]
+        logger.info("Placing %s entry order @ $%.4f", side.value, entry_price)
 
-        logger.info(f"Placing {side.value} entry order @ ${entry_price:.4f}")
-
-        # Create position object
         position = Position(
             side=side,
             entry_price=entry_price,
@@ -372,32 +397,51 @@ class TradingBot:
             sl_price=signal["sl_price"],
             entry_time=datetime.now(),
             leverage=self.config.LEVERAGE,
+            asset=self.config.ASSET,
+            execution_state="pending_entry",
+            confirmed_quantity=0.0,
+            remaining_quantity=0.0,
         )
 
-        # Place order on exchange (skip for paper trading)
         if not self.config.PAPER_TRADING:
+            position.cloid = f"entry-{position.id[:20]}"
+            self.db.save_position(position)
             result = await self.api.place_order(
                 side=side,
                 price=entry_price,
                 quantity=quantity,
-                order_type="post_only",  # Maker order — earns rebate
+                cloid=position.cloid,
+                order_type="post_only",
+                coin=position.asset,
             )
-
             if result.get("status") != "ok":
-                logger.error(f"Entry order failed: {result.get('msg')}")
+                position.execution_state = (
+                    "state_unknown"
+                    if result.get("status") == "unknown"
+                    else "entry_rejected"
+                )
+                self.db.save_position(position)
+                logger.error("Entry order was not accepted: %s", result.get("msg"))
                 return
 
-            # Store order ID
             position.oid = result.get("response", {}).get("oid")
+            # Keep the acknowledged entry in memory so reconciliation can turn
+            # it into managed exposure only after an authoritative fill.
+            self.positions.append(position)
+            self.db.save_position(position)
+            self.db.log_event(
+                "entry_submitted",
+                f"{side.value} entry acknowledged; awaiting exchange fill",
+                {"position_id": position.id, "cloid": position.cloid},
+            )
+            return
 
-        # Add to positions
+        position.execution_state = "open"
+        position.confirmed_quantity = quantity
+        position.remaining_quantity = quantity
         self.positions.append(position)
-
-        # Save to database
         self.db.save_position(position)
-        self.db.log_event("trade_entry", f"{side.value} entry", signal)
-
-        # Send notification
+        self.db.log_event("trade_entry", f"{side.value} paper entry", signal)
         if self.telegram:
             await self.telegram.notify_trade_entry(signal)
 
@@ -423,6 +467,8 @@ class TradingBot:
         positions_to_close = []
 
         for position in self.positions:
+            if position.execution_state != "open":
+                continue
             should_close = False
             exit_reason = ""
 
@@ -456,191 +502,351 @@ class TradingBot:
     async def _maybe_reconcile_positions(self):
         """Periodically reconcile local positions with exchange (live mode only)."""
         if self.config.PAPER_TRADING:
-            return
+            return True
 
         now = datetime.now()
         if (
             self._last_reconciliation is not None
             and now - self._last_reconciliation < self._reconciliation_interval
         ):
-            return
+            return not self._is_paused
 
         self._last_reconciliation = now
-        await self._reconcile_positions()
+        return await self._reconcile_positions()
 
     async def _reconcile_positions(self):
-        """Compare local positions against exchange and fix drift.
-
-        Cases handled:
-        1. Position exists on exchange but NOT locally → restore from exchange
-        2. Position exists locally but NOT on exchange → mark closed
-        3. Quantity mismatch → update local quantity
-        """
+        """Synchronize managed exposure only from a successful exchange snapshot."""
         try:
-            exchange_positions = await self.api.get_positions()
-            asset = self.config.ASSET
-
-            # Build a lookup of exchange positions for our asset
-            exchange_map: Dict[str, Dict] = {}
-            for ep in exchange_positions:
-                coin = ep.get("coin", "")
-                if coin == asset:
-                    exchange_map[ep.get("direction", "")] = ep
-
-            # Track which exchange positions were matched
-            matched_directions: List[str] = []
-
-            # --- Check local positions against exchange ---
-            stale_locals: List[Position] = []
-            for local_pos in list(self.positions):
-                direction = "Long" if local_pos.side == Side.LONG else "Short"
-                ep = exchange_map.get(direction)
-
-                if ep is None:
-                    # Position closed on exchange without us knowing
-                    logger.warning(
-                        f"⚠️ Reconciliation: {direction} position MISSING on exchange — closing locally"
-                    )
-                    stale_locals.append(local_pos)
-                    continue
-
-                matched_directions.append(direction)
-
-                # Check quantity mismatch
-                ex_qty = abs(float(ep.get("szi", 0)))
-                if ex_qty > 0 and abs(ex_qty - local_pos.quantity) > 1e-6:
-                    logger.warning(
-                        f"⚠️ Reconciliation: qty drift local={local_pos.quantity} vs exchange={ex_qty}"
-                    )
-                    local_pos.quantity = ex_qty
-
-                # Update entry price if available
-                ex_entry = float(ep.get("entryPx", 0))
-                if ex_entry > 0 and abs(ex_entry - local_pos.entry_price) > 1e-6:
-                    logger.warning(
-                        f"⚠️ Reconciliation: entry price drift local={local_pos.entry_price} vs exchange={ex_entry}"
-                    )
-                    local_pos.entry_price = ex_entry
-
-            # Close stale local positions
-            for pos in stale_locals:
-                mids = await self.api.get_mids()
-                exit_price = float(mids.get(asset, pos.entry_price))
-                await self._close_position(pos, exit_price, "RECONCILE_MISSING")
-
-            # --- Check for exchange positions not in local ---
-            for direction, ep in exchange_map.items():
-                if direction in matched_directions:
-                    continue
-
-                # Found a position on exchange we don't track
-                side = Side.LONG if direction == "Long" else Side.SHORT
-                entry_px = float(ep.get("entryPx", 0))
-                qty = abs(float(ep.get("szi", 0)))
-
-                if qty <= 0:
-                    continue
-
-                logger.warning(
-                    f"⚠️ Reconciliation: restoring untracked {direction} "
-                    f"qty={qty} @ ${entry_px:.4f} from exchange"
-                )
-                mids = await self.api.get_mids()
-                current_px = float(mids.get(asset, entry_px))
-                tp_mult = 1.03 if side == Side.LONG else 0.97
-                sl_mult = 0.97 if side == Side.LONG else 1.03
-
-                restored = Position(
-                    side=side,
-                    entry_price=entry_px,
-                    quantity=qty,
-                    tp_price=round(current_px * tp_mult, 4),
-                    sl_price=round(current_px * sl_mult, 4),
-                    entry_time=datetime.now(),  # best effort
-                    leverage=self.config.LEVERAGE,
-                    status=OrderStatus.OPEN,
-                )
-                self.positions.append(restored)
-                self.db.save_position(restored)
-                self.db.log_event(
-                    "reconciliation",
-                    f"Restored {direction} position from exchange",
-                    {"entry_price": entry_px, "quantity": qty},
-                )
-
-                if self.telegram:
-                    await self.telegram.notify_info(
-                        f"🔄 Reconciliation: restored {direction} {qty} {asset} @ ${entry_px:.4f}"
-                    )
-
-            if stale_locals or len(matched_directions) != len(exchange_map):
-                logger.info("Reconciliation complete — state synced with exchange")
-
+            snapshot = await self.api.get_positions()
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
-            logger.error(f"Position reconciliation failed: {exc}")
+            snapshot = PositionRead.unavailable(str(exc))
+        if not isinstance(snapshot, PositionRead):
+            snapshot = PositionRead.success(list(snapshot))
+        if not snapshot.available:
+            logger.error("Position reconciliation unavailable: %s", snapshot.error)
+            self._is_paused = True
+            self.db.log_event(
+                "reconciliation_unavailable", snapshot.error or "unknown", {}
+            )
+            if self.telegram:
+                await self.telegram.notify_error(
+                    snapshot.error or "unknown", "reconciliation"
+                )
+            return False
+
+        asset = self.config.ASSET
+        exchange_map: Dict[str, Dict] = {}
+        for exchange_position in snapshot:
+            if exchange_position.get("coin") == asset:
+                exchange_map[exchange_position.get("direction", "")] = exchange_position
+
+        matched_directions: List[str] = []
+        for local_position in list(self.positions):
+            direction = "Long" if local_position.side == Side.LONG else "Short"
+            exchange_position = exchange_map.get(direction)
+            local_position.last_exchange_observation = snapshot.observed_at
+            if exchange_position is None:
+                if local_position.execution_state == "pending_entry":
+                    # A resting post-only entry is not exposure. Retain its
+                    # durable intent until order cancellation/fill resolution;
+                    # do not manufacture an external-close event.
+                    self.db.save_position(local_position)
+                    continue
+                if local_position.execution_state == "exit_requested":
+                    # Resolve the known exit intent from fills before deciding
+                    # whether the account is flat. This path never resubmits.
+                    await self._confirm_live_exit(local_position)
+                    continue
+                # A confirmed flat exchange account is not permission to submit
+                # another exit. The exact external fill is unknown, so preserve
+                # an auditable unresolved state and halt entry activity.
+                local_position.execution_state = "externally_closed"
+                local_position.remaining_quantity = 0.0
+                self.db.save_position(local_position)
+                self.db.log_event(
+                    "external_close_unresolved",
+                    "Exchange position is flat; no synthetic P&L was recorded",
+                    {"position_id": local_position.id, "asset": asset},
+                )
+                self.positions.remove(local_position)
+                self._is_paused = True
+                logger.warning(
+                    "Exchange reports %s flat; position %s requires fill review",
+                    asset,
+                    local_position.id,
+                )
+                continue
+
+            matched_directions.append(direction)
+            exchange_quantity = abs(float(exchange_position.get("szi", 0)))
+            if exchange_quantity <= 0:
+                continue
+            local_position.quantity = exchange_quantity
+            local_position.confirmed_quantity = exchange_quantity
+            local_position.remaining_quantity = exchange_quantity
+            local_position.execution_state = "open"
+            exchange_entry = float(exchange_position.get("entryPx", 0))
+            if exchange_entry > 0:
+                local_position.entry_price = exchange_entry
+            self.db.save_position(local_position)
+
+        for direction, exchange_position in exchange_map.items():
+            if direction in matched_directions:
+                continue
+            quantity = abs(float(exchange_position.get("szi", 0)))
+            if quantity <= 0:
+                continue
+            side = Side.LONG if direction == "Long" else Side.SHORT
+            recovered = Position(
+                side=side,
+                entry_price=float(exchange_position.get("entryPx", 0)),
+                quantity=quantity,
+                tp_price=0.0,
+                sl_price=0.0,
+                entry_time=datetime.now(),
+                leverage=self.config.LEVERAGE,
+                asset=asset,
+                execution_state="recovered_unmanaged",
+                confirmed_quantity=quantity,
+                remaining_quantity=quantity,
+                last_exchange_observation=snapshot.observed_at,
+            )
+            self.positions.append(recovered)
+            self.db.save_position(recovered)
+            self.db.log_event(
+                "recovered_unmanaged_position",
+                "Exchange-only exposure quarantined; no TP/SL was invented",
+                {"position_id": recovered.id, "asset": asset, "quantity": quantity},
+            )
+            self._is_paused = True
+            logger.error("Recovered unmanaged %s exposure; new entries paused", asset)
+
+        return True
 
     async def _close_position(self, position: Position, exit_price: float, reason: str):
-        """Close a position"""
-        logger.info(
-            f"Closing {position.side.value} position @ ${exit_price:.4f} ({reason})"
+        """Request an exit and settle it only after authoritative evidence.
+
+        Paper mode receives an immediate deterministic fill. In live mode, an
+        accepted IOC is merely an exit request; its final P&L is not recorded
+        until the exchange is flat *and* reports the corresponding fill.
+        """
+        if exit_price <= 0:
+            logger.error("Refusing %s exit without a valid market price", reason)
+            return False
+        if position.is_exit_pending:
+            logger.info("Exit already pending for %s", position.id)
+            return False
+
+        if self.config.PAPER_TRADING:
+            simulated_exit_fee = (
+                position.entry_price * position.quantity * self.config.TAKER_FEE_PCT
+            )
+            await self._finalize_closed_position(
+                position,
+                exit_price,
+                position.quantity,
+                simulated_exit_fee,
+                reason,
+            )
+            return True
+
+        position.execution_state = "exit_requested"
+        position.exit_reason = reason
+        position.exit_cloid = position.exit_cloid or f"exit-{position.id[:20]}"
+        self.db.save_position(position)
+        close_side = Side.SHORT if position.side == Side.LONG else Side.LONG
+        result = await self.api.place_order(
+            side=close_side,
+            price=exit_price,
+            quantity=position.remaining_quantity or position.quantity,
+            reduce_only=True,
+            cloid=position.exit_cloid,
+            order_type="ioc",
+            coin=position.asset or self.config.ASSET,
+        )
+        if result.get("status") != "ok":
+            position.execution_state = (
+                "state_unknown" if result.get("status") == "unknown" else "open"
+            )
+            self.db.save_position(position)
+            logger.error(
+                "Exit submission did not complete for %s: %s",
+                position.id,
+                result.get("msg"),
+            )
+            return False
+
+        position.exit_oid = result.get("response", {}).get("oid")
+        self.db.save_position(position)
+        return await self._confirm_live_exit(position)
+
+    async def _confirm_live_exit(self, position: Position) -> bool:
+        """Finalize only when a fill and a flat authoritative snapshot agree."""
+        try:
+            snapshot = await self.api.get_positions()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            snapshot = PositionRead.unavailable(str(exc))
+        if not isinstance(snapshot, PositionRead):
+            snapshot = PositionRead.success(list(snapshot))
+        if not snapshot.available:
+            self.db.log_event(
+                "exit_confirmation_unavailable",
+                snapshot.error or "unknown",
+                {"position_id": position.id},
+            )
+            return False
+
+        direction = "Long" if position.side == Side.LONG else "Short"
+        matching_exchange_positions = [
+            exchange_position
+            for exchange_position in snapshot
+            if exchange_position.get("coin") == (position.asset or self.config.ASSET)
+            and exchange_position.get("direction") == direction
+            and abs(float(exchange_position.get("szi", 0))) > 1e-9
+        ]
+        fills = await self.api.get_recent_fills()
+        matching_fills = [
+            fill
+            for fill in fills
+            if position.exit_oid is not None
+            and str(fill.get("oid")) == str(position.exit_oid)
+        ]
+        filled_quantity = sum(abs(float(fill.get("sz", 0))) for fill in matching_fills)
+
+        for index, fill in enumerate(matching_fills):
+            fill_id = str(
+                fill.get("tid") or fill.get("hash") or f"{position.exit_oid}:{index}"
+            )
+            if not self.db.record_execution_fill(
+                position_id=position.id,
+                exchange_order_id=position.exit_oid,
+                fill_id=fill_id,
+                quantity=abs(float(fill.get("sz", 0))),
+                price=float(fill.get("px", 0)),
+                fee=float(fill.get("fee", 0) or 0),
+            ):
+                self.db.log_event(
+                    "duplicate_exit_fill",
+                    "Duplicate fill ignored during reconciliation",
+                    {"position_id": position.id, "fill_id": fill_id},
+                )
+                return False
+
+        if matching_exchange_positions:
+            if filled_quantity > 0:
+                remaining = sum(
+                    abs(float(exchange_position.get("szi", 0)))
+                    for exchange_position in matching_exchange_positions
+                )
+                position.quantity = remaining
+                position.confirmed_quantity = remaining
+                position.remaining_quantity = remaining
+                position.execution_state = "partially_closed"
+                self.db.save_position(position)
+                self.db.log_event(
+                    "exit_partially_filled",
+                    "Authoritative snapshot reports residual exposure",
+                    {"position_id": position.id, "remaining_quantity": remaining},
+                )
+            else:
+                self.db.log_event(
+                    "exit_unfilled",
+                    "Exchange still reports full exposure",
+                    {"position_id": position.id},
+                )
+            return False
+
+        if not matching_fills:
+            position.execution_state = "state_unknown"
+            self.db.save_position(position)
+            self.db.log_event(
+                "exit_fill_unresolved",
+                "Account is flat but matching fill data is unavailable",
+                {"position_id": position.id},
+            )
+            logger.error(
+                "Refusing synthetic P&L: exit fill for %s is unavailable", position.id
+            )
+            return False
+
+        expected_quantity = position.remaining_quantity or position.quantity
+        if filled_quantity + 1e-9 < expected_quantity:
+            position.quantity = max(0.0, expected_quantity - filled_quantity)
+            position.remaining_quantity = position.quantity
+            position.execution_state = "partially_closed"
+            self.db.save_position(position)
+            return False
+
+        exit_notional = sum(
+            abs(float(fill.get("sz", 0))) * float(fill.get("px", 0))
+            for fill in matching_fills
+        )
+        fill_price = exit_notional / filled_quantity if filled_quantity else 0.0
+        fill_fee = sum(float(fill.get("fee", 0) or 0) for fill in matching_fills)
+        return await self._finalize_closed_position(
+            position,
+            fill_price,
+            filled_quantity,
+            fill_fee,
+            position.exit_reason or "EXIT",
         )
 
-        # Calculate P&L
+    async def _finalize_closed_position(
+        self,
+        position: Position,
+        exit_price: float,
+        quantity: float,
+        exit_fee: float,
+        reason: str,
+    ) -> bool:
+        """Perform the single terminal accounting path for a confirmed exit."""
+        if exit_price <= 0 or quantity <= 0:
+            return False
         if position.side == Side.LONG:
-            pnl_gross = (exit_price - position.entry_price) * position.quantity
+            pnl_gross = (exit_price - position.entry_price) * quantity
         else:
-            pnl_gross = (position.entry_price - exit_price) * position.quantity
-
-        # PnL = (exit - entry) * qty; leverage determines margin, NOT PnL
-        pnl = pnl_gross
-
-        # Calculate fees - entry (maker via post-only) + exit (taker via IOC)
-        notional = position.entry_price * position.quantity
-        entry_fee = notional * self.config.MAKER_FEE_PCT  # Post-only = maker
-        exit_fee = notional * self.config.TAKER_FEE_PCT   # IOC = taker
+            pnl_gross = (position.entry_price - exit_price) * quantity
+        entry_fee = position.entry_price * quantity * self.config.MAKER_FEE_PCT
         fees = entry_fee + exit_fee
-
-        # Net P&L
-        net_pnl = pnl - fees
-
-        # Create trade record
+        net_pnl = pnl_gross - fees
         trade = Trade(
             side=position.side,
             entry_price=position.entry_price,
             exit_price=exit_price,
-            quantity=position.quantity,
+            quantity=quantity,
             entry_time=position.entry_time,
             exit_time=datetime.now(),
             pnl=net_pnl,
             fees=fees,
+            notes=reason,
         )
-
-        # Save trade to database
         self.db.save_trade(trade)
+        self.db.close_position_by_uid(position.id)
         self.db.log_event(
-            "trade_exit", f"{position.side.value} exit ({reason})", {"pnl": net_pnl}
+            "trade_exit",
+            f"{position.side.value} exit ({reason})",
+            {"pnl": net_pnl, "position_id": position.id},
         )
-
-        # Update tracking
         self.trades.append(trade)
         self.daily_trades_list.append(trade)
         self.daily_trades += 1
         self.daily_pnl += net_pnl
         self.current_capital += net_pnl
-
-        # Update survival risk manager
         self.survival_risk.update_after_trade(
             trade, self.current_capital, datetime.now()
         )
         self.survival_risk.tiered_risk.update(
-            trade, self.daily_pnl, self.consecutive_losses
+            trade,
+            self.daily_pnl,
+            self.consecutive_losses,
+            self.starting_capital,
         )
-
-        # Record trade for adaptive parameters and performance analysis
         self.adaptive_params.record_trade(trade)
         self.performance_analyzer.add_trade(trade)
-
-        # Update consecutive losses tracking
         if net_pnl < 0:
             self.consecutive_losses += 1
             if (
@@ -650,39 +856,20 @@ class TradingBot:
                 await self._trigger_circuit_breaker()
         else:
             self.consecutive_losses = 0
-
-        # Update drawdown tracking
-        self.current_capital = max(self.current_capital, 100)  # Floor at minimum
+        self.current_capital = max(self.current_capital, 100)
         if self.current_capital > self.peak_equity:
             self.peak_equity = self.current_capital
-        drawdown = (self.peak_equity - self.current_capital) / self.peak_equity
-        self.max_drawdown_pct = max(self.max_drawdown_pct, drawdown)
-
-        # Remove from positions
+        self.max_drawdown_pct = max(
+            self.max_drawdown_pct,
+            (self.peak_equity - self.current_capital) / self.peak_equity,
+        )
+        position.execution_state = "closed_confirmed"
+        position.remaining_quantity = 0.0
         if position in self.positions:
             self.positions.remove(position)
-
-        # Close on exchange
-        if not self.config.PAPER_TRADING:
-            # Cancel any remaining open entry order
-            if position.oid:
-                await self.api.cancel_order(position.oid)
-
-            # Place closing order (IOC — ensure execution)
-            close_side = Side.SHORT if position.side == Side.LONG else Side.LONG
-            close_result = await self.api.place_order(
-                side=close_side,
-                price=exit_price,
-                quantity=position.quantity,
-                reduce_only=True,
-                order_type="ioc",
-            )
-            if close_result.get("status") != "ok":
-                logger.error(f"Close order failed: {close_result.get('msg')}")
-
-        # Send notification
         if self.telegram:
             await self.telegram.notify_trade_exit(trade)
+        return True
 
     # Risk management
 
@@ -787,6 +974,8 @@ class TradingBot:
             return
 
         for position in self.positions:
+            if position.execution_state != "open":
+                continue
             if position.side == Side.LONG:
                 pnl = (current_price - position.entry_price) * position.quantity
             else:
@@ -816,16 +1005,29 @@ class TradingBot:
             mids = await self.api.get_mids()
             current_price = float(mids.get(self.config.ASSET, 0))
 
-        positions_to_close = self.positions[:]
+        if current_price <= 0:
+            logger.error(
+                "[%s] Cannot close positions without a valid mid price", reason
+            )
+            return 0
 
+        positions_to_close = [
+            position
+            for position in self.positions
+            if position.execution_state == "open"
+        ]
+
+        closed_count = 0
         for position in positions_to_close:
-            await self._close_position(position, current_price, reason)
+            if await self._close_position(position, current_price, reason):
+                closed_count += 1
 
-        closed_count = len(positions_to_close)
         logger.info(
-            f"[{reason}] Closed {closed_count} position(s). P&L: ${self.daily_pnl:.2f}"
+            "[%s] Confirmed %s position(s) closed. P&L: $%.2f",
+            reason,
+            closed_count,
+            self.daily_pnl,
         )
-
         return closed_count
 
     async def close_all_positions(self):
@@ -1097,6 +1299,19 @@ class TradingBot:
                         cloid=pdict.get("cloid"),
                         status=OrderStatus.OPEN,
                         unrealized_pnl=pdict.get("unrealized_pnl", 0),
+                        id=pdict.get("position_uid") or uuid4().hex,
+                        asset=pdict.get("asset") or self.config.ASSET,
+                        execution_state=pdict.get("execution_state") or "state_unknown",
+                        exit_oid=pdict.get("exit_oid"),
+                        exit_cloid=pdict.get("exit_cloid"),
+                        exit_reason=pdict.get("exit_reason"),
+                        confirmed_quantity=pdict.get("confirmed_quantity") or 0.0,
+                        remaining_quantity=pdict.get("remaining_quantity"),
+                        last_exchange_observation=(
+                            datetime.fromisoformat(pdict["last_exchange_observation"])
+                            if pdict.get("last_exchange_observation")
+                            else None
+                        ),
                     )
                     self.positions.append(pos)
                 except Exception as exc:
