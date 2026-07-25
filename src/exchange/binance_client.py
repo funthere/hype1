@@ -78,7 +78,9 @@ class BinanceClient:
             data = resp.json()
             return data
         except httpx.HTTPStatusError as exc:
-            logger.error("Binance HTTP %d for %s: %s", exc.response.status_code, params, exc)
+            logger.error(
+                "Binance HTTP %d for %s: %s", exc.response.status_code, params, exc
+            )
             return None
         except Exception as exc:
             logger.error("Binance request error for %s: %s", params, exc)

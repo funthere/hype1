@@ -46,7 +46,7 @@ def create_testnet_config():
     # Trading parameters
     config.ASSET = "HYPE"
     config.TIMEFRAME = "15m"
-    config.LEVERAGE = 5
+    config.LEVERAGE = 2
 
     # Strategy Parameters
     config.ROC_SHORT = 1
@@ -56,18 +56,18 @@ def create_testnet_config():
     config.EMA_TREND_FILTER = 20
 
     # Risk Management
-    config.RISK_PER_TRADE_PCT = 0.08
+    config.RISK_PER_TRADE_PCT = 0.005
     config.TP_ATR_MULTIPLIER = 2.0
     config.SL_ATR_MULTIPLIER = 0.4
-    config.MAX_POSITIONS = 2
-    config.MAX_DAILY_TRADES = 20
+    config.MAX_POSITIONS = 1
+    config.MAX_DAILY_TRADES = 5
 
     # Order Settings
     config.ORDER_TYPE = "limit"
     config.MIN_ORDER_SIZE = 10
 
     # Safety
-    config.MAX_DAILY_LOSS_PCT = 0.15
+    config.MAX_DAILY_LOSS_PCT = 0.02
 
     # Fees
     config.MAKER_FEE_PCT = -0.0002
@@ -90,7 +90,7 @@ async def run_testnet_bot():
 ║                                                                ║
 ║  STRATEGY:                                                     ║
 ║  - Ultra-Optimized Momentum                                    ║
-║  - 8% risk per trade, 5x leverage, max 2 positions            ║
+║  - 0.5% risk at stop, 2x leverage, one position              ║
 ║                                                                ║
 ║  REQUIREMENTS:                                                 ║
 ║  - .env file with PRIVATE_KEY and ADDRESS                      ║
@@ -133,6 +133,7 @@ async def run_testnet_bot():
     config.ORDER_TYPE = testnet_config.ORDER_TYPE
     config.MIN_ORDER_SIZE = testnet_config.MIN_ORDER_SIZE
     config.MAX_DAILY_LOSS_PCT = testnet_config.MAX_DAILY_LOSS_PCT
+    config.validate()
 
     logger.info("=" * 60)
     logger.info("TESTNET TRADING BOT STARTING")
