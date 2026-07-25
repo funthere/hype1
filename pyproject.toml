@@ -12,6 +12,10 @@ markers = [
     "slow: Slow running tests"
 ]
 
+[tool.ruff.format]
+# Explicitly pin formatting defaults so CI and local produce identical output.
+line-ending = "lf"
+
 [tool.ruff.lint]
 # Enforce syntax, undefined-name, and import correctness while legacy style
 # cleanup is completed incrementally in focused modules.

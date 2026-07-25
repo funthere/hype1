@@ -461,9 +461,7 @@ class TestOrderTypes:
     async def test_place_order_default_gtc(self, api_with_mock):
         """Test default order type is GTC"""
         api, exchange = api_with_mock
-        result = await api.place_order(
-            side=Side.LONG, price=100.0, quantity=10.0
-        )
+        result = await api.place_order(side=Side.LONG, price=100.0, quantity=10.0)
         assert result["status"] == "ok"
         call_kwargs = exchange.order.call_args[1]
         assert call_kwargs["order_type"] == {"limit": {"tif": "Gtc"}}
