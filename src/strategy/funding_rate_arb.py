@@ -118,7 +118,13 @@ class FundingArbConfig(BaseStrategyConfig):
     def __post_init__(self):
         if self.SPOT_ELIGIBLE_COINS is None:
             self.SPOT_ELIGIBLE_COINS = [
-                "BTC", "ETH", "SOL", "HYPE", "ARB", "AVAX", "SUI",
+                "BTC",
+                "ETH",
+                "SOL",
+                "HYPE",
+                "ARB",
+                "AVAX",
+                "SUI",
             ]
 
     def validate(self) -> bool:
@@ -217,8 +223,12 @@ class FundingRateArbStrategy:
                     break
                 except Exception as api_exc:
                     if "429" in str(api_exc) and attempt < 2:
-                        wait = 30 * (2 ** attempt)  # 30s, 60s
-                        logger.warning("HL API 429 — retrying in %ds (attempt %d/3)", wait, attempt + 1)
+                        wait = 30 * (2**attempt)  # 30s, 60s
+                        logger.warning(
+                            "HL API 429 — retrying in %ds (attempt %d/3)",
+                            wait,
+                            attempt + 1,
+                        )
                         await asyncio.sleep(wait)
                     else:
                         raise
@@ -780,9 +790,7 @@ class FundingRateArbStrategy:
         eligible = [c.upper() for c in (self.config.SPOT_ELIGIBLE_COINS or [])]
         return coin.upper() in eligible
 
-    async def _open_spot_hedge(
-        self, pos: FundingPosition, mark_px: float
-    ) -> bool:
+    async def _open_spot_hedge(self, pos: FundingPosition, mark_px: float) -> bool:
         """Open spot hedge to make the position delta-neutral.
 
         For SHORT perp → BUY spot (same notional).
@@ -807,7 +815,10 @@ class FundingRateArbStrategy:
                 self._paper_capital -= fee
                 logger.info(
                     "[PAPER] SPOT BUY %s | qty=%.4f px=%.2f fee=%.4f",
-                    pos.coin, spot_qty, spot_price, fee,
+                    pos.coin,
+                    spot_qty,
+                    spot_price,
+                    fee,
                 )
             else:
                 result = await self.api.place_spot_order(
@@ -820,14 +831,17 @@ class FundingRateArbStrategy:
                 if result.get("status") != "ok":
                     logger.error(
                         "Spot hedge BUY failed for %s: %s — perp position still open!",
-                        pos.coin, result,
+                        pos.coin,
+                        result,
                     )
                     # Perp position is still open — not ideal but don't close it
                     # (funding collection continues, just with delta exposure)
                     return False
                 logger.info(
                     "[LIVE] SPOT BUY %s | qty=%.4f px=%.2f",
-                    pos.coin, spot_qty, spot_price,
+                    pos.coin,
+                    spot_qty,
+                    spot_price,
                 )
 
             pos.spot_hedge_enabled = True
@@ -860,10 +874,15 @@ class FundingRateArbStrategy:
                 if self.config.PAPER_TRADING:
                     fee = pos.spot_quantity * current_price * self.config.TAKER_FEE_PCT
                     spot_pnl -= fee
-                    self._paper_capital += pos.spot_quantity * pos.spot_entry_price + spot_pnl
+                    self._paper_capital += (
+                        pos.spot_quantity * pos.spot_entry_price + spot_pnl
+                    )
                     logger.info(
                         "[PAPER] SPOT SELL %s | qty=%.4f px=%.2f spot_pnl=%.4f",
-                        pos.coin, pos.spot_quantity, current_price, spot_pnl,
+                        pos.coin,
+                        pos.spot_quantity,
+                        current_price,
+                        spot_pnl,
                     )
                 else:
                     result = await self.api.place_spot_order(
@@ -876,12 +895,16 @@ class FundingRateArbStrategy:
                     if result.get("status") != "ok":
                         logger.error(
                             "Spot SELL failed for %s: %s",
-                            pos.coin, result,
+                            pos.coin,
+                            result,
                         )
                         return 0.0
                     logger.info(
                         "[LIVE] SPOT SELL %s | qty=%.4f px=%.2f spot_pnl~%.4f",
-                        pos.coin, pos.spot_quantity, current_price, spot_pnl,
+                        pos.coin,
+                        pos.spot_quantity,
+                        current_price,
+                        spot_pnl,
                     )
 
             # Reset hedge state

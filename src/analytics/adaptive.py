@@ -364,26 +364,28 @@ class AdaptiveParameterManager:
             phase, self.PHASE_ADJUSTMENTS[MarketPhase.TRANSITION]
         )
 
-        # Apply adjustments
+        # Adaptive parameters may only lower the configured risk policy. They
+        # cannot turn a favorable regime into extra leverage or more loss at a
+        # stop, especially when the configuration is later promoted to mainnet.
         new_leverage = max(
             1,
             min(
-                100,
+                self.base_config.LEVERAGE,
                 int(
                     self.base_config.LEVERAGE
                     * vol_adj["leverage_factor"]
-                    * self.performance_multiplier
+                    * min(1.0, self.performance_multiplier)
                 ),
             ),
         )
 
         new_risk = max(
-            0.01,
+            0.0,
             min(
-                0.50,
+                self.base_config.RISK_PER_TRADE_PCT,
                 self.base_config.RISK_PER_TRADE_PCT
                 * vol_adj["risk_factor"]
-                * self.performance_multiplier,
+                * min(1.0, self.performance_multiplier),
             ),
         )
 

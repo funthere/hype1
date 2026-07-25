@@ -161,6 +161,25 @@ class TestDatabaseIntegration:
         positions = db.get_active_positions()
         assert len(positions) == 0
 
+    def test_execution_fill_ledger_is_idempotent(self, db):
+        """The same exchange fill cannot be booked twice after a restart."""
+        assert db.record_execution_fill(
+            position_id="position-1",
+            exchange_order_id=42,
+            fill_id="fill-42",
+            quantity=1.0,
+            price=100.0,
+            fee=0.05,
+        )
+        assert not db.record_execution_fill(
+            position_id="position-1",
+            exchange_order_id=42,
+            fill_id="fill-42",
+            quantity=1.0,
+            price=100.0,
+            fee=0.05,
+        )
+
     def test_save_trade(self, db):
         """Test saving completed trades"""
         trade = Trade(

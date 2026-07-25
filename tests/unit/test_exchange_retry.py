@@ -124,7 +124,10 @@ class TestCalculateDelay:
     def test_jitter_increases_delay_range(self):
         """With jitter, delay should be >= base exponential and < base + jitter_range."""
         random.seed(42)
-        delays = [calculate_delay(1, base_delay=1.0, max_delay=30.0, jitter=True) for _ in range(100)]
+        delays = [
+            calculate_delay(1, base_delay=1.0, max_delay=30.0, jitter=True)
+            for _ in range(100)
+        ]
         # Without jitter: 2.0. With jitter: [2.0, 2.5)
         assert all(2.0 <= d < 2.5 for d in delays)
 
@@ -162,8 +165,12 @@ class TestRetryWithBackoff:
         fn = AsyncMock(
             side_effect=[ConnectionError("fail"), ConnectionError("fail"), "success"]
         )
-        with patch("src.exchange.retry.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            result = await retry_with_backoff(fn, max_retries=3, base_delay=0.01, jitter=False)
+        with patch(
+            "src.exchange.retry.asyncio.sleep", new_callable=AsyncMock
+        ) as mock_sleep:
+            result = await retry_with_backoff(
+                fn, max_retries=3, base_delay=0.01, jitter=False
+            )
 
         assert result == "success"
         assert fn.call_count == 3
@@ -199,8 +206,12 @@ class TestRetryWithBackoff:
                 "ok",
             ]
         )
-        with patch("src.exchange.retry.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            await retry_with_backoff(fn, max_retries=3, base_delay=1.0, max_delay=30.0, jitter=False)
+        with patch(
+            "src.exchange.retry.asyncio.sleep", new_callable=AsyncMock
+        ) as mock_sleep:
+            await retry_with_backoff(
+                fn, max_retries=3, base_delay=1.0, max_delay=30.0, jitter=False
+            )
 
         # attempt 0: delay = 1.0 * 2^0 = 1.0
         # attempt 1: delay = 1.0 * 2^1 = 2.0
@@ -219,7 +230,9 @@ class TestRetryWithBackoff:
                 "ok",
             ]
         )
-        with patch("src.exchange.retry.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        with patch(
+            "src.exchange.retry.asyncio.sleep", new_callable=AsyncMock
+        ) as mock_sleep:
             await retry_with_backoff(fn, max_retries=3, base_delay=1.0, jitter=True)
 
         actual_delays = [call.args[0] for call in mock_sleep.call_args_list]
@@ -252,9 +265,7 @@ class TestRetryWithBackoff:
     @pytest.mark.asyncio
     async def test_http_503_error_is_retried(self):
         """RuntimeError with 503 status in message triggers retry."""
-        fn = AsyncMock(
-            side_effect=[RuntimeError("HTTP 503 Service Unavailable"), "ok"]
-        )
+        fn = AsyncMock(side_effect=[RuntimeError("HTTP 503 Service Unavailable"), "ok"])
         with patch("src.exchange.retry.asyncio.sleep", new_callable=AsyncMock):
             result = await retry_with_backoff(fn, max_retries=2, base_delay=0.01)
         assert result == "ok"
@@ -263,6 +274,7 @@ class TestRetryWithBackoff:
     @pytest.mark.asyncio
     async def test_retry_with_args_and_kwargs(self):
         """Arguments and keyword arguments are forwarded to the function."""
+
         async def my_func(a, b, key=None):
             return (a, b, key)
 
@@ -280,9 +292,7 @@ class TestRetryWithBackoff:
     @pytest.mark.asyncio
     async def test_non_retryable_explicit_wrapper(self):
         """NonRetryableError wrapper prevents retry even for ConnectionError."""
-        fn = AsyncMock(
-            side_effect=NonRetryableError(ConnectionError("don't retry"))
-        )
+        fn = AsyncMock(side_effect=NonRetryableError(ConnectionError("don't retry")))
         with pytest.raises(NonRetryableError):
             await retry_with_backoff(fn, max_retries=3)
         assert fn.call_count == 1
@@ -305,10 +315,10 @@ class TestRetryWithBackoff:
     @pytest.mark.asyncio
     async def test_max_delay_is_respected(self):
         """Delays should never exceed max_delay (without jitter)."""
-        fn = AsyncMock(
-            side_effect=[ConnectionError("fail")] * 6 + ["ok"]
-        )
-        with patch("src.exchange.retry.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        fn = AsyncMock(side_effect=[ConnectionError("fail")] * 6 + ["ok"])
+        with patch(
+            "src.exchange.retry.asyncio.sleep", new_callable=AsyncMock
+        ) as mock_sleep:
             await retry_with_backoff(
                 fn, max_retries=6, base_delay=5.0, max_delay=10.0, jitter=False
             )

@@ -37,6 +37,7 @@ from rich.text import Text
 
 from hyperliquid.info import Info
 
+from src.core.safety import require_mainnet_release_approval
 from src.exchange.binance_client import BinanceClient
 from src.storage.database import DatabaseManager
 from src.strategy.cross_exchange_arb import (
@@ -313,8 +314,7 @@ async def run_strategy(config: CrossExchangeArbConfig) -> None:
                 latest_dydx_rates = await strategy.fetch_binance_funding_rates()
 
                 open_coins = {
-                    p["coin"]
-                    for p in strategy.get_status()["positions"]["open"]
+                    p["coin"] for p in strategy.get_status()["positions"]["open"]
                 }
 
                 console.clear()
@@ -379,6 +379,13 @@ async def run_strategy(config: CrossExchangeArbConfig) -> None:
 def main() -> None:
     args = parse_args()
 
+    if args.live:
+        try:
+            require_mainnet_release_approval("Cross-exchange arbitrage strategy")
+        except RuntimeError as exc:
+            console.print(f"[bold red]{exc}[/bold red]")
+            return
+
     # Locate config file
     config_path = Path(args.config)
     if not config_path.is_absolute():
@@ -423,8 +430,11 @@ def main() -> None:
     setup_logging(config.LOG_FILE)
 
     logger.info("Config loaded from %s", config_path)
-    logger.info("Mode: %s | Coins: %s", "PAPER" if config.PAPER_TRADING else "LIVE",
-                ", ".join(config.COINS))
+    logger.info(
+        "Mode: %s | Coins: %s",
+        "PAPER" if config.PAPER_TRADING else "LIVE",
+        ", ".join(config.COINS),
+    )
 
     try:
         asyncio.run(run_strategy(config))

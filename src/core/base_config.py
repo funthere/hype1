@@ -53,20 +53,22 @@ class BaseStrategyConfig:
     # ------------------------------------------------------------------ #
     ASSET: str = "HYPE"
     TIMEFRAME: str = "15m"
-    LEVERAGE: int = 5
+    LEVERAGE: int = 2
 
     # ------------------------------------------------------------------ #
     # Risk management
     # ------------------------------------------------------------------ #
-    RISK_PER_TRADE_PCT: float = 0.08
+    RISK_PER_TRADE_PCT: float = 0.005
     POSITION_SIZE_PCT: float = 0.10
-    MAX_POSITIONS: int = 2
-    MAX_DAILY_TRADES: int = 20
+    MAX_POSITIONS: int = 1
+    MAX_DAILY_TRADES: int = 5
+    MAX_POSITION_NOTIONAL_PCT: float = 0.20
+    MAX_POSITION_NOTIONAL_USD: float = 2_000.0
 
     # ------------------------------------------------------------------ #
     # Limits
     # ------------------------------------------------------------------ #
-    MAX_DAILY_LOSS_PCT: float = 0.15
+    MAX_DAILY_LOSS_PCT: float = 0.02
     MAX_LOSS_PCT: float = 0.05
     EMERGENCY_SHUTDOWN: bool = False
 
@@ -99,6 +101,8 @@ class BaseStrategyConfig:
         "POSITION_SIZE_PCT",
         "MAX_POSITIONS",
         "MAX_DAILY_TRADES",
+        "MAX_POSITION_NOTIONAL_PCT",
+        "MAX_POSITION_NOTIONAL_USD",
         "MAX_DAILY_LOSS_PCT",
         "MAX_LOSS_PCT",
         "EMERGENCY_SHUTDOWN",
@@ -157,7 +161,9 @@ class BaseStrategyConfig:
                 coerced = cls._coerce_value(value, attr_type)
                 setattr(config, key, coerced)
             except (ValueError, TypeError):
-                logger.warning("Could not parse env var %s=%r, keeping default", key, value)
+                logger.warning(
+                    "Could not parse env var %s=%r, keeping default", key, value
+                )
 
         return config
 
@@ -189,4 +195,32 @@ class BaseStrategyConfig:
         if self.MAX_POSITIONS < 1:
             raise ValueError("MAX_POSITIONS must be >= 1")
 
+        if self.MAX_DAILY_LOSS_PCT <= 0 or self.MAX_DAILY_LOSS_PCT > 1:
+            raise ValueError("MAX_DAILY_LOSS_PCT must be between 0 and 1")
+
+        if not 0 < self.MAX_POSITION_NOTIONAL_PCT <= 1:
+            raise ValueError("MAX_POSITION_NOTIONAL_PCT must be in (0, 1]")
+        if self.MAX_POSITION_NOTIONAL_USD <= 0:
+            raise ValueError("MAX_POSITION_NOTIONAL_USD must be positive")
+
+        if not self.PAPER_TRADING and not self.USE_TESTNET:
+            self._validate_mainnet_policy()
+
         return True
+
+    def _validate_mainnet_policy(self) -> None:
+        """Enforce hard mainnet ceilings after all overrides are applied."""
+        if self.RISK_PER_TRADE_PCT > 0.01:
+            raise ValueError("Mainnet RISK_PER_TRADE_PCT may not exceed 1%")
+        if self.LEVERAGE > 2:
+            raise ValueError("Mainnet LEVERAGE may not exceed 2x")
+        if self.MAX_DAILY_LOSS_PCT > 0.03:
+            raise ValueError("Mainnet MAX_DAILY_LOSS_PCT may not exceed 3%")
+        if self.MAX_POSITIONS > 1:
+            raise ValueError("Mainnet MAX_POSITIONS is limited to 1")
+        if self.MAX_DAILY_TRADES > 5:
+            raise ValueError("Mainnet MAX_DAILY_TRADES is limited to 5")
+        if not 0 < self.MAX_POSITION_NOTIONAL_PCT <= 0.20:
+            raise ValueError("Mainnet MAX_POSITION_NOTIONAL_PCT must be in (0, 20%]")
+        if self.MAX_POSITION_NOTIONAL_USD <= 0:
+            raise ValueError("Mainnet MAX_POSITION_NOTIONAL_USD must be positive")

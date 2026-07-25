@@ -136,15 +136,24 @@ class TieredRiskManager:
         self.consecutive_losses = 0
         self.daily_pnl = 0.0
 
-    def update(self, trade: Trade, daily_pnl: float, consecutive_losses: int):
-        """Update tier status after a trade"""
+    def update(
+        self,
+        trade: Trade,
+        daily_pnl: float,
+        consecutive_losses: int,
+        starting_capital: float,
+    ):
+        """Update tier status using daily P&L normalized to account equity."""
         self.daily_pnl = daily_pnl
         self.consecutive_losses = consecutive_losses
+        daily_loss_pct = (
+            abs(self.daily_pnl) / starting_capital
+            if self.daily_pnl < 0 and starting_capital > 0
+            else 0.0
+        )
 
-        # Check tier 2 (daily loss exceeded)
-        if self.daily_pnl < -self.tier_2_daily_loss_pct:
+        if daily_loss_pct >= self.tier_2_daily_loss_pct:
             self.current_tier = 2
-        # Check tier 1 (consecutive losses)
         elif self.consecutive_losses >= self.tier_1_after_losses:
             self.current_tier = 1
         else:
@@ -178,13 +187,13 @@ class VolatilityRiskManager:
         atr_window: int = 14,
         vol_multiplier_threshold: float = 1.5,
         leverage_reduction_factor: float = 0.6,
+        max_leverage: int = 2,
     ):
         self.atr_window = atr_window
         self.vol_multiplier_threshold = vol_multiplier_threshold
         self.leverage_reduction_factor = leverage_reduction_factor
-
+        self.max_leverage = max_leverage
         self.atr_history: List[float] = []
-        self.base_leverage = 5
 
     def update_atr(self, atr: float):
         """Update ATR history"""
@@ -222,7 +231,7 @@ class VolatilityRiskManager:
         """Get leverage adjusted for current volatility"""
         vol_mult = self.get_volatility_multiplier()
         adjusted = int(base_leverage * vol_mult)
-        return max(1, min(adjusted, 10))  # Clamp between 1x and 10x
+        return max(1, min(adjusted, self.max_leverage))
 
 
 class TimeBasedRiskManager:
@@ -369,7 +378,7 @@ class SurvivalRiskManager:
             max_heat_per_setup=config.MAX_DAILY_LOSS_PCT
         )
         self.tiered_risk = TieredRiskManager()
-        self.volatility_manager = VolatilityRiskManager()
+        self.volatility_manager = VolatilityRiskManager(max_leverage=config.LEVERAGE)
         self.time_manager = TimeBasedRiskManager()
         self.drawdown_breaker = MaxDrawdownCircuitBreaker(max_drawdown_pct=0.10)
 
@@ -484,6 +493,6 @@ class SurvivalRiskManager:
             tier=self.tiered_risk.current_tier,
             risk_mult=self.tiered_risk.get_risk_multiplier(),
             vol_mult=self.volatility_manager.get_volatility_multiplier(),
-            lev=self.volatility_manager.get_adjusted_leverage(5),
+            lev=self.volatility_manager.get_adjusted_leverage(self.config.LEVERAGE),
             time_safe="YES" if self.time_manager.is_safe_to_trade()[0] else "NO",
         )

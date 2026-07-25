@@ -42,22 +42,24 @@ def config() -> CrossExchangeArbConfig:
 def mock_hl_info():
     """Mock HyperLiquid Info SDK object."""
     info = MagicMock()
-    info.meta_and_asset_ctxs = MagicMock(return_value=(
-        {
-            "universe": [
-                {"name": "BTC"},
-                {"name": "ETH"},
-                {"name": "SOL"},
-                {"name": "DOGE"},
-            ]
-        },
-        [
-            {"funding": "0.0012", "markPx": "68000"},   # BTC: 0.00015/hr
-            {"funding": "0.0008", "markPx": "3500"},    # ETH: 0.0001/hr
-            {"funding": "-0.0008", "markPx": "150"},    # SOL: -0.0001/hr
-            {"funding": "0.0000", "markPx": "0.10"},    # DOGE: 0
-        ],
-    ))
+    info.meta_and_asset_ctxs = MagicMock(
+        return_value=(
+            {
+                "universe": [
+                    {"name": "BTC"},
+                    {"name": "ETH"},
+                    {"name": "SOL"},
+                    {"name": "DOGE"},
+                ]
+            },
+            [
+                {"funding": "0.0012", "markPx": "68000"},  # BTC: 0.00015/hr
+                {"funding": "0.0008", "markPx": "3500"},  # ETH: 0.0001/hr
+                {"funding": "-0.0008", "markPx": "150"},  # SOL: -0.0001/hr
+                {"funding": "0.0000", "markPx": "0.10"},  # DOGE: 0
+            ],
+        )
+    )
     return info
 
 
@@ -65,11 +67,13 @@ def mock_hl_info():
 def mock_binance_client():
     """Mock Binance client."""
     client = MagicMock()
-    client.get_all_funding_rates = AsyncMock(return_value={
-        "BTC": {"ticker": "BTC-USD", "rate_hourly": 0.00005, "oracle_px": 67990},
-        "ETH": {"ticker": "ETH-USD", "rate_hourly": 0.00015, "oracle_px": 3498},
-        "SOL": {"ticker": "SOL-USD", "rate_hourly": -0.00005, "oracle_px": 149.5},
-    })
+    client.get_all_funding_rates = AsyncMock(
+        return_value={
+            "BTC": {"ticker": "BTC-USD", "rate_hourly": 0.00005, "oracle_px": 67990},
+            "ETH": {"ticker": "ETH-USD", "rate_hourly": 0.00015, "oracle_px": 3498},
+            "SOL": {"ticker": "SOL-USD", "rate_hourly": -0.00005, "oracle_px": 149.5},
+        }
+    )
     client.healthcheck = AsyncMock(return_value=True)
     client.close = AsyncMock()
     return client
@@ -199,12 +203,20 @@ class TestOpening:
     async def test_no_duplicate_position(self, strategy, mock_binance_client):
         strategy.set_binance_client(mock_binance_client)
         id1 = await strategy.open_position(
-            "BTC", ArbSide.SHORT_HL_LONG_BINANCE,
-            0.00015, 0.00005, 68000.0, 67990.0,
+            "BTC",
+            ArbSide.SHORT_HL_LONG_BINANCE,
+            0.00015,
+            0.00005,
+            68000.0,
+            67990.0,
         )
         id2 = await strategy.open_position(
-            "BTC", ArbSide.SHORT_HL_LONG_BINANCE,
-            0.00015, 0.00005, 68100.0, 68000.0,
+            "BTC",
+            ArbSide.SHORT_HL_LONG_BINANCE,
+            0.00015,
+            0.00005,
+            68100.0,
+            68000.0,
         )
         assert id1 is not None
         assert id2 is None  # duplicate, should be rejected
@@ -215,12 +227,20 @@ class TestOpening:
         strategy.config.MAX_CONCURRENT_POSITIONS = 1
 
         id1 = await strategy.open_position(
-            "BTC", ArbSide.SHORT_HL_LONG_BINANCE,
-            0.00015, 0.00005, 68000.0, 67990.0,
+            "BTC",
+            ArbSide.SHORT_HL_LONG_BINANCE,
+            0.00015,
+            0.00005,
+            68000.0,
+            67990.0,
         )
         id2 = await strategy.open_position(
-            "ETH", ArbSide.LONG_HL_SHORT_BINANCE,
-            0.0001, 0.00015, 3500.0, 3498.0,
+            "ETH",
+            ArbSide.LONG_HL_SHORT_BINANCE,
+            0.0001,
+            0.00015,
+            3500.0,
+            3498.0,
         )
         assert id1 is not None
         assert id2 is None  # max reached
@@ -231,8 +251,12 @@ class TestOpening:
         initial_capital = strategy._paper_capital
 
         await strategy.open_position(
-            "BTC", ArbSide.SHORT_HL_LONG_BINANCE,
-            0.00015, 0.00005, 68000.0, 67990.0,
+            "BTC",
+            ArbSide.SHORT_HL_LONG_BINANCE,
+            0.00015,
+            0.00005,
+            68000.0,
+            67990.0,
         )
         # Fees should have been deducted
         assert strategy._paper_capital < initial_capital
@@ -248,8 +272,12 @@ class TestClosing:
     async def test_close_position(self, strategy, mock_binance_client):
         strategy.set_binance_client(mock_binance_client)
         pos_id = await strategy.open_position(
-            "BTC", ArbSide.SHORT_HL_LONG_BINANCE,
-            0.00015, 0.00005, 68000.0, 67990.0,
+            "BTC",
+            ArbSide.SHORT_HL_LONG_BINANCE,
+            0.00015,
+            0.00005,
+            68000.0,
+            67990.0,
         )
         assert pos_id is not None
 
@@ -273,8 +301,12 @@ class TestClosing:
     async def test_close_already_closed(self, strategy, mock_binance_client):
         strategy.set_binance_client(mock_binance_client)
         pos_id = await strategy.open_position(
-            "BTC", ArbSide.SHORT_HL_LONG_BINANCE,
-            0.00015, 0.00005, 68000.0, 67990.0,
+            "BTC",
+            ArbSide.SHORT_HL_LONG_BINANCE,
+            0.00015,
+            0.00005,
+            68000.0,
+            67990.0,
         )
         await strategy.close_position(pos_id, "test")
         result = await strategy.close_position(pos_id, "test2")
@@ -297,8 +329,7 @@ class TestRunCycle:
         # ETH spread = 0.0001 - 0.00015 = -0.00005 < ENTRY_THRESHOLD → skip
         # SOL spread = -0.0001 - (-0.00005) = -0.00005 < ENTRY_THRESHOLD → skip
         open_count = sum(
-            1 for p in strategy._positions.values()
-            if p.status == PairStatus.OPEN
+            1 for p in strategy._positions.values() if p.status == PairStatus.OPEN
         )
         assert open_count >= 1
 
@@ -322,8 +353,12 @@ class TestStatus:
     async def test_status_after_open(self, strategy, mock_binance_client):
         strategy.set_binance_client(mock_binance_client)
         await strategy.open_position(
-            "BTC", ArbSide.SHORT_HL_LONG_BINANCE,
-            0.00015, 0.00005, 68000.0, 67990.0,
+            "BTC",
+            ArbSide.SHORT_HL_LONG_BINANCE,
+            0.00015,
+            0.00005,
+            68000.0,
+            67990.0,
         )
         status = strategy.get_status()
         assert status["summary"]["open_count"] == 1
@@ -337,12 +372,18 @@ class TestStatus:
 
 class TestFundingAccumulation:
     @pytest.mark.asyncio
-    async def test_funding_accumulated_for_short_hl(self, strategy, mock_binance_client):
+    async def test_funding_accumulated_for_short_hl(
+        self, strategy, mock_binance_client
+    ):
         """SHORT on HL with positive rate should accumulate funding."""
         strategy.set_binance_client(mock_binance_client)
         pos_id = await strategy.open_position(
-            "BTC", ArbSide.SHORT_HL_LONG_BINANCE,
-            0.00015, 0.00005, 68000.0, 67990.0,
+            "BTC",
+            ArbSide.SHORT_HL_LONG_BINANCE,
+            0.00015,
+            0.00005,
+            68000.0,
+            67990.0,
         )
         pos = strategy._positions[pos_id]
 

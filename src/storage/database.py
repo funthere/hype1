@@ -156,6 +156,26 @@ class DatabaseManager:
             """
         )
 
+        # Execution ledger makes fill settlement idempotent across retries/restarts.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS execution_fills (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                position_id TEXT NOT NULL,
+                exchange_order_id INTEGER,
+                fill_id TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                price REAL NOT NULL,
+                fee REAL DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(exchange_order_id, fill_id),
+                UNIQUE(position_id, fill_id)
+            )
+            """
+        )
+
+        self._migrate_execution_schema(cursor)
+
         # Create indexes
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time)"
@@ -175,6 +195,33 @@ class DatabaseManager:
 
         self.conn.commit()
         logger.info(f"Database initialized at {self.db_path}")
+
+    def _migrate_execution_schema(self, cursor: sqlite3.Cursor) -> None:
+        """Add execution-lifecycle columns to databases created by prior releases."""
+        cursor.execute("PRAGMA table_info(positions)")
+        existing_columns = {row["name"] for row in cursor.fetchall()}
+        migrations = {
+            "position_uid": "TEXT",
+            "asset": "TEXT DEFAULT ''",
+            "execution_state": "TEXT DEFAULT 'open'",
+            "exit_oid": "INTEGER",
+            "exit_cloid": "TEXT",
+            "exit_reason": "TEXT",
+            "confirmed_quantity": "REAL DEFAULT 0",
+            "remaining_quantity": "REAL",
+            "last_exchange_observation": "TEXT",
+        }
+        for name, definition in migrations.items():
+            if name not in existing_columns:
+                cursor.execute(f"ALTER TABLE positions ADD COLUMN {name} {definition}")
+        cursor.execute(
+            "UPDATE positions SET position_uid = 'legacy-' || id "
+            "WHERE position_uid IS NULL"
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_positions_position_uid "
+            "ON positions(position_uid) WHERE position_uid IS NOT NULL"
+        )
 
     # Trade operations
 
@@ -310,87 +357,136 @@ class DatabaseManager:
     # Position operations
 
     def save_position(self, position: Position) -> int:
-        """
-        Save or update an active position
-
-        Returns:
-            The ID of the inserted/updated position
-        """
+        """Persist the complete execution lifecycle of a position idempotently."""
         cursor = self.conn.cursor()
+        position_uid = position.id
+        if position.asset is None:
+            position.asset = ""
 
-        # Check if position already exists (by oid or cloid)
-        if position.oid:
-            cursor.execute("SELECT id FROM positions WHERE oid = ?", (position.oid,))
-        elif position.cloid:
-            cursor.execute(
-                "SELECT id FROM positions WHERE cloid = ?", (position.cloid,)
-            )
-        else:
-            cursor.execute(
-                "SELECT id FROM positions WHERE entry_time = ? AND side = ?",
-                (position.entry_time.isoformat(), position.side.value),
-            )
-
+        cursor.execute(
+            "SELECT id FROM positions WHERE position_uid = ?", (position_uid,)
+        )
         existing = cursor.fetchone()
-
+        values = (
+            position.side.value,
+            position.entry_price,
+            position.quantity,
+            position.tp_price,
+            position.sl_price,
+            position.entry_time.isoformat(),
+            position.leverage,
+            position.oid,
+            position.cloid,
+            position.status.value,
+            position.unrealized_pnl,
+            position.asset,
+            position.execution_state,
+            position.exit_oid,
+            position.exit_cloid,
+            position.exit_reason,
+            position.confirmed_quantity,
+            position.remaining_quantity,
+            (
+                position.last_exchange_observation.isoformat()
+                if position.last_exchange_observation
+                else None
+            ),
+        )
         if existing:
-            # Update existing position
             cursor.execute(
                 """
-                UPDATE positions SET
-                    unrealized_pnl = ?, status = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (position.unrealized_pnl, position.status.value, existing["id"]),
+                UPDATE positions
+                SET position_uid = ?, side=?, entry_price=?, quantity=?, tp_price=?, sl_price=?,
+                    entry_time=?, leverage=?, oid=?, cloid=?, status=?, unrealized_pnl=?,
+                    asset=?, execution_state=?, exit_oid=?, exit_cloid=?, exit_reason=?,
+                    confirmed_quantity=?, remaining_quantity=?, last_exchange_observation=?,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE position_uid=?
+""",
+                (position_uid,) + values + (position_uid,),
             )
             self.conn.commit()
             return existing["id"]
-        else:
-            # Insert new position
+
+        cursor.execute(
+            """
+            INSERT INTO positions (
+                side, entry_price, quantity, tp_price, sl_price, entry_time,
+                leverage, oid, cloid, status, unrealized_pnl, position_uid,
+                asset, execution_state, exit_oid, exit_cloid, exit_reason,
+                confirmed_quantity, remaining_quantity, last_exchange_observation
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            values[:11] + (position_uid,) + values[11:],
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def record_execution_fill(
+        self,
+        position_id: str,
+        fill_id: str,
+        quantity: float,
+        price: float,
+        fee: float = 0.0,
+        exchange_order_id: Optional[int] = None,
+    ) -> bool:
+        """Record one exchange fill once; ``False`` means it was already seen."""
+        cursor = self.conn.cursor()
+        try:
             cursor.execute(
                 """
-                INSERT INTO positions (
-                    side, entry_price, quantity, tp_price, sl_price, entry_time,
-                    leverage, oid, cloid, status, unrealized_pnl
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO execution_fills (
+                    position_id, exchange_order_id, fill_id, quantity, price, fee
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    position.side.value,
-                    position.entry_price,
-                    position.quantity,
-                    position.tp_price,
-                    position.sl_price,
-                    position.entry_time.isoformat(),
-                    position.leverage,
-                    position.oid,
-                    position.cloid,
-                    position.status.value,
-                    position.unrealized_pnl,
-                ),
+                (position_id, exchange_order_id, fill_id, quantity, price, fee),
             )
             self.conn.commit()
-            return cursor.lastrowid
+            return True
+        except sqlite3.IntegrityError:
+            return False
 
     def get_active_positions(self) -> List[Dict]:
-        """Get all active positions"""
+        """Return positions that still require management or operator review."""
         cursor = self.conn.cursor()
-
         cursor.execute(
-            "SELECT * FROM positions WHERE status = 'open' ORDER BY entry_time DESC"
+            """
+            SELECT * FROM positions
+            WHERE execution_state NOT IN ('closed_confirmed', 'externally_closed')
+              AND status != 'closed'
+            ORDER BY entry_time DESC
+            """
         )
-        rows = cursor.fetchall()
-
-        return [self._row_to_dict(row) for row in rows]
+        return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     def close_position(self, position_id: int) -> bool:
-        """Mark a position as closed"""
+        """Mark a database position closed only after confirmed settlement."""
         cursor = self.conn.cursor()
-
         cursor.execute(
-            "UPDATE positions SET status = 'closed', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            """
+            UPDATE positions
+            SET status = 'closed', execution_state = 'closed_confirmed',
+                remaining_quantity = 0, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
             (position_id,),
         )
+        self.conn.commit()
+        return cursor.rowcount > 0
 
+    def close_position_by_uid(self, position_uid: str) -> bool:
+        """Mark a position terminal using its stable lifecycle identity."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            UPDATE positions
+            SET status = 'closed', execution_state = 'closed_confirmed',
+                remaining_quantity = 0, updated_at = CURRENT_TIMESTAMP
+            WHERE position_uid = ?
+            """,
+            (position_uid,),
+        )
         self.conn.commit()
         return cursor.rowcount > 0
 

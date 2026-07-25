@@ -15,7 +15,7 @@ help:
 	@echo "  make install          - Install dependencies"
 	@echo "  make run-paper        - Run paper trading bot (simulated)"
 	@echo "  make run-testnet      - Run testnet bot (real orders, no real money)"
-	@echo "  make run-mainnet      - Run mainnet bot (REAL MONEY - be careful!)"
+	@echo "  make run-mainnet      - Blocked pending production release approval"
 	@echo "  make dashboard        - Run Streamlit dashboard"
 	@echo ""
 	@echo "  make kill-bot         - Kill any running bot instance"
@@ -30,7 +30,7 @@ help:
 	@echo ""
 	@echo "  make test             - Run tests"
 	@echo "  make lint             - Run linter"
-	@echo "  make format           - Format code with black"
+	@echo "  make format           - Format code with ruff"
 	@echo ""
 	@echo "Options:"
 	@echo "  API_PORT=$(API_PORT)    # API server port (default: 8000)"
@@ -38,8 +38,8 @@ help:
 
 # Install dependencies
 install:
-	@echo "Installing dependencies..."
-	pip install -r requirements.txt
+	@echo "Installing locked dependencies..."
+	pip install --require-hashes -r requirements.lock
 	@echo "✓ Dependencies installed"
 
 # Kill any process using the API port
@@ -82,16 +82,8 @@ run-testnet: kill-port
 
 # Run mainnet bot (REAL MONEY!)
 run-mainnet: kill-port
-	@echo "⚠️  WARNING: Starting MAINNET bot with REAL MONEY!"
-	@echo "Press Ctrl+C within 5 seconds to cancel..."
-	@sleep 5
-	@if [ -f .env ]; then \
-		python3 run_mainnet_bot.py; \
-	else \
-		echo "❌ Error: .env file required for mainnet trading"; \
-		echo "   Copy .env.example to .env and fill in your credentials"; \
-		exit 1; \
-	fi
+	@echo "⚠️  Mainnet execution is source-gated pending release approval"
+	@python3 run_mainnet_bot.py
 
 # Run dashboard
 dashboard: kill-dashboard-port

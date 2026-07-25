@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src.core.config import BotConfig
+from src.core.safety import require_mainnet_release_approval
 from src.bot.trading_bot import TradingBot
 
 # Configure logging
@@ -86,6 +87,13 @@ def parse_args():
 async def main():
     """Main entry point"""
     args = parse_args()
+
+    if args.mode == "mainnet":
+        try:
+            require_mainnet_release_approval("Modular trading bot")
+        except RuntimeError as exc:
+            logger.critical("%s", exc)
+            return
 
     # Load config
     if args.config:

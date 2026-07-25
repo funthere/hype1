@@ -30,6 +30,7 @@ from rich.table import Table
 from rich.panel import Panel
 
 from src.core.config import BotConfig
+from src.core.safety import require_mainnet_release_approval
 from src.exchange.connector import HyperliquidAPI
 from src.storage.database import DatabaseManager
 from src.strategy.trend_following import (
@@ -60,37 +61,71 @@ logger = logging.getLogger("trend_following_runner")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Trend Following Bot for HyperLiquid"
+    parser = argparse.ArgumentParser(description="Trend Following Bot for HyperLiquid")
+    parser.add_argument(
+        "--paper",
+        action="store_true",
+        default=True,
+        help="Paper trading mode (default: True)",
     )
-    parser.add_argument("--paper", action="store_true", default=True,
-                        help="Paper trading mode (default: True)")
-    parser.add_argument("--live", action="store_true",
-                        help="Live trading mode (requires .env)")
-    parser.add_argument("--capital", type=float, default=10000,
-                        help="Starting capital in USD (default: 10000)")
-    parser.add_argument("--coins", type=str, default=None,
-                        help="Comma-separated list of coins (default: all)")
-    parser.add_argument("--interval", type=int, default=300,
-                        help="Check interval in seconds (default: 300)")
-    parser.add_argument("--leverage", type=int, default=3,
-                        help="Leverage (default: 3)")
-    parser.add_argument("--fast-ema", type=int, default=9,
-                        help="Fast EMA period (default: 9)")
-    parser.add_argument("--slow-ema", type=int, default=21,
-                        help="Slow EMA period (default: 21)")
-    parser.add_argument("--candle-tf", type=str, default="1h",
-                        help="Candle timeframe (default: 1h)")
-    parser.add_argument("--max-positions", type=int, default=3,
-                        help="Max concurrent positions (default: 3)")
-    parser.add_argument("--atr-stop", type=float, default=2.0,
-                        help="ATR stop loss multiplier (default: 2.0)")
-    parser.add_argument("--atr-tp", type=float, default=4.0,
-                        help="ATR take profit multiplier (default: 4.0)")
-    parser.add_argument("--trailing", type=float, default=2.5,
-                        help="ATR trailing stop multiplier (default: 2.5)")
-    parser.add_argument("--no-trailing", action="store_true",
-                        help="Disable trailing stop")
+    parser.add_argument(
+        "--live", action="store_true", help="Live trading mode (requires .env)"
+    )
+    parser.add_argument(
+        "--capital",
+        type=float,
+        default=10000,
+        help="Starting capital in USD (default: 10000)",
+    )
+    parser.add_argument(
+        "--coins",
+        type=str,
+        default=None,
+        help="Comma-separated list of coins (default: all)",
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=300,
+        help="Check interval in seconds (default: 300)",
+    )
+    parser.add_argument("--leverage", type=int, default=3, help="Leverage (default: 3)")
+    parser.add_argument(
+        "--fast-ema", type=int, default=9, help="Fast EMA period (default: 9)"
+    )
+    parser.add_argument(
+        "--slow-ema", type=int, default=21, help="Slow EMA period (default: 21)"
+    )
+    parser.add_argument(
+        "--candle-tf", type=str, default="1h", help="Candle timeframe (default: 1h)"
+    )
+    parser.add_argument(
+        "--max-positions",
+        type=int,
+        default=3,
+        help="Max concurrent positions (default: 3)",
+    )
+    parser.add_argument(
+        "--atr-stop",
+        type=float,
+        default=2.0,
+        help="ATR stop loss multiplier (default: 2.0)",
+    )
+    parser.add_argument(
+        "--atr-tp",
+        type=float,
+        default=4.0,
+        help="ATR take profit multiplier (default: 4.0)",
+    )
+    parser.add_argument(
+        "--trailing",
+        type=float,
+        default=2.5,
+        help="ATR trailing stop multiplier (default: 2.5)",
+    )
+    parser.add_argument(
+        "--no-trailing", action="store_true", help="Disable trailing stop"
+    )
     return parser.parse_args()
 
 
@@ -106,13 +141,15 @@ def display_status(strategy: TrendFollowingStrategy) -> None:
     # Header
     mode = "📄 PAPER" if status["paper_trading"] else "🔴 LIVE"
     capital = status.get("capital", 0)
-    console.print(Panel(
-        f"[bold]{mode}[/bold] | Capital: [green]${capital:,.2f}[/green] | "
-        f"Cycle: {status['cycle']} | "
-        f"PnL: {'[green]' if status['summary']['total_pnl'] >= 0 else '[red]'}"
-        f"${status['summary']['total_pnl']:,.4f}[/]",
-        title="📈 Trend Following Bot",
-    ))
+    console.print(
+        Panel(
+            f"[bold]{mode}[/bold] | Capital: [green]${capital:,.2f}[/green] | "
+            f"Cycle: {status['cycle']} | "
+            f"PnL: {'[green]' if status['summary']['total_pnl'] >= 0 else '[red]'}"
+            f"${status['summary']['total_pnl']:,.4f}[/]",
+            title="📈 Trend Following Bot",
+        )
+    )
 
     # Open positions
     open_pos = status["positions"]["open"]
@@ -160,6 +197,12 @@ async def main() -> None:
     args = parse_args()
 
     paper_mode = not args.live
+    if not paper_mode:
+        try:
+            require_mainnet_release_approval("Trend-following strategy")
+        except RuntimeError as exc:
+            console.print(f"[bold red]{exc}[/bold red]")
+            return
     coins = [c.strip().upper() for c in args.coins.split(",")] if args.coins else None
 
     config = TrendFollowingConfig(
@@ -215,16 +258,18 @@ async def main() -> None:
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
 
-    console.print(Panel(
-        f"[bold green]Trend Following Bot Started[/bold green]\n"
-        f"Mode: {'PAPER' if paper_mode else 'LIVE'}\n"
-        f"Capital: ${args.capital:,.2f}\n"
-        f"Coins: {', '.join(coins) if coins else 'ALL'}\n"
-        f"Interval: {args.interval}s\n"
-        f"EMA: {args.fast_ema}/{args.slow_ema} | TF: {args.candle_tf}\n"
-        f"SL: {args.atr_stop}x ATR | TP: {args.atr_tp}x ATR | Trail: {args.trailing}x ATR",
-        title="🚀 Config",
-    ))
+    console.print(
+        Panel(
+            f"[bold green]Trend Following Bot Started[/bold green]\n"
+            f"Mode: {'PAPER' if paper_mode else 'LIVE'}\n"
+            f"Capital: ${args.capital:,.2f}\n"
+            f"Coins: {', '.join(coins) if coins else 'ALL'}\n"
+            f"Interval: {args.interval}s\n"
+            f"EMA: {args.fast_ema}/{args.slow_ema} | TF: {args.candle_tf}\n"
+            f"SL: {args.atr_stop}x ATR | TP: {args.atr_tp}x ATR | Trail: {args.trailing}x ATR",
+            title="🚀 Config",
+        )
+    )
 
     # Run strategy in background
     strategy_task = asyncio.create_task(strategy.run())

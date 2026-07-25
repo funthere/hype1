@@ -58,8 +58,8 @@ class CrossExchangeArbConfig(BaseStrategyConfig):
     DATABASE_PATH: str = "cross_exchange_arb.db"
 
     # --- Strategy thresholds (per-hour) ---
-    ENTRY_THRESHOLD: float = 0.0001   # 0.01 %/hr
-    EXIT_THRESHOLD: float = 0.00003   # 0.003 %/hr
+    ENTRY_THRESHOLD: float = 0.0001  # 0.01 %/hr
+    EXIT_THRESHOLD: float = 0.00003  # 0.003 %/hr
 
     # --- Coins ---
     COINS: List[str] = field(default_factory=lambda: ["BTC", "ETH", "SOL"])
@@ -79,11 +79,13 @@ class CrossExchangeArbConfig(BaseStrategyConfig):
     # --- API URLs ---
     HL_BASE_URL: str = "https://api.hyperliquid.xyz"
     BINANCE_BASE_URL: str = "https://fapi.binance.com"
-    BINANCE_MARKETS: Dict[str, str] = field(default_factory=lambda: {
-        "BTC": "BTCUSDT",
-        "ETH": "ETHUSDT",
-        "SOL": "SOLUSDT",
-    })
+    BINANCE_MARKETS: Dict[str, str] = field(
+        default_factory=lambda: {
+            "BTC": "BTCUSDT",
+            "ETH": "ETHUSDT",
+            "SOL": "SOLUSDT",
+        }
+    )
 
     # --- Fees ---
     HL_MAKER_FEE: float = -0.0002
@@ -96,11 +98,22 @@ class CrossExchangeArbConfig(BaseStrategyConfig):
 
     # --- YAML loader ---
     _ENV_VAR_KEYS: ClassVar[Tuple[str, ...]] = (
-        "USE_TESTNET", "PAPER_TRADING", "PRIVATE_KEY", "ADDRESS",
-        "ACCOUNT_ADDRESS", "PAPER_CAPITAL", "LEVERAGE",
-        "RISK_PER_TRADE_PCT", "POSITION_SIZE_PCT", "MAX_POSITIONS",
-        "MAX_DAILY_TRADES", "MAX_DAILY_LOSS_PCT", "MAX_LOSS_PCT",
-        "EMERGENCY_SHUTDOWN", "MAKER_FEE_PCT", "TAKER_FEE_PCT",
+        "USE_TESTNET",
+        "PAPER_TRADING",
+        "PRIVATE_KEY",
+        "ADDRESS",
+        "ACCOUNT_ADDRESS",
+        "PAPER_CAPITAL",
+        "LEVERAGE",
+        "RISK_PER_TRADE_PCT",
+        "POSITION_SIZE_PCT",
+        "MAX_POSITIONS",
+        "MAX_DAILY_TRADES",
+        "MAX_DAILY_LOSS_PCT",
+        "MAX_LOSS_PCT",
+        "EMERGENCY_SHUTDOWN",
+        "MAKER_FEE_PCT",
+        "TAKER_FEE_PCT",
         "DATABASE_PATH",
     )
 
@@ -178,7 +191,7 @@ class ArbPosition:
     arb_side: ArbSide
 
     # HL leg
-    hl_side: str          # "SHORT" or "LONG"
+    hl_side: str  # "SHORT" or "LONG"
     hl_quantity: float
     hl_notional: float
     hl_entry_price: float
@@ -345,8 +358,11 @@ class CrossExchangeArbStrategy:
                 1 for p in self._positions.values() if p.status == PairStatus.OPEN
             )
             if open_count >= self.config.MAX_CONCURRENT_POSITIONS:
-                logger.info("Max concurrent positions (%d) reached – skipping %s",
-                            self.config.MAX_CONCURRENT_POSITIONS, coin)
+                logger.info(
+                    "Max concurrent positions (%d) reached – skipping %s",
+                    self.config.MAX_CONCURRENT_POSITIONS,
+                    coin,
+                )
                 return None
 
             # No duplicate open for same coin
@@ -357,7 +373,8 @@ class CrossExchangeArbStrategy:
 
             # Exposure check
             coin_exposure = sum(
-                p.hl_notional for p in self._positions.values()
+                p.hl_notional
+                for p in self._positions.values()
                 if p.coin == coin and p.status == PairStatus.OPEN
             )
             capital = await self._get_available_capital()
@@ -399,10 +416,17 @@ class CrossExchangeArbStrategy:
                     "[PAPER] OPEN %s %s | %s HL:%s dYdX:%s | "
                     "hl_qty=%.6f dydx_qty=%.6f | hl_px=%.2f dydx_px=%.2f | "
                     "spread=%.6f fees=%.4f",
-                    position_id, coin, arb_side.value,
-                    hl_side, dydx_side,
-                    hl_qty, dydx_qty, hl_price, dydx_price,
-                    spread, total_fees,
+                    position_id,
+                    coin,
+                    arb_side.value,
+                    hl_side,
+                    dydx_side,
+                    hl_qty,
+                    dydx_qty,
+                    hl_price,
+                    dydx_price,
+                    spread,
+                    total_fees,
                 )
             else:
                 # Live: place HL order via HyperliquidAPI
@@ -430,8 +454,9 @@ class CrossExchangeArbStrategy:
                 entry_time=time.time(),
                 last_funding_time=time.time(),
                 fees_paid=abs(self.config.HL_TAKER_FEE * notional)
-                           + abs(self.config.BINANCE_TAKER_FEE * notional)
-                           if self.config.PAPER_TRADING else 0.0,
+                + abs(self.config.BINANCE_TAKER_FEE * notional)
+                if self.config.PAPER_TRADING
+                else 0.0,
             )
 
             self._positions[position_id] = pos
@@ -499,9 +524,8 @@ class CrossExchangeArbStrategy:
                 dydx_pnl = (dydx_price - pos.dydx_entry_price) * pos.dydx_quantity
 
             # Close fees
-            close_fees = (
-                abs(pos.hl_notional * self.config.HL_TAKER_FEE)
-                + abs(pos.dydx_notional * self.config.BINANCE_TAKER_FEE)
+            close_fees = abs(pos.hl_notional * self.config.HL_TAKER_FEE) + abs(
+                pos.dydx_notional * self.config.BINANCE_TAKER_FEE
             )
 
             # Net PnL = HL leg + dYdX leg + funding collected - close fees
@@ -512,9 +536,14 @@ class CrossExchangeArbStrategy:
                 logger.info(
                     "[PAPER] CLOSE %s %s | reason=%s | "
                     "hl_pnl=%.4f dydx_pnl=%.4f funding=%.4f fees=%.4f net=%.4f",
-                    position_id, pos.coin, reason,
-                    hl_pnl, dydx_pnl, pos.total_funding_collected,
-                    close_fees + pos.fees_paid, realized_pnl,
+                    position_id,
+                    pos.coin,
+                    reason,
+                    hl_pnl,
+                    dydx_pnl,
+                    pos.total_funding_collected,
+                    close_fees + pos.fees_paid,
+                    realized_pnl,
                 )
 
             pos.status = PairStatus.CLOSED
@@ -570,8 +599,11 @@ class CrossExchangeArbStrategy:
         dydx_rates = await self.fetch_binance_funding_rates()
 
         if not hl_rates or not dydx_rates:
-            logger.warning("Missing rates – HL: %d coins, dYdX: %d coins",
-                           len(hl_rates), len(dydx_rates))
+            logger.warning(
+                "Missing rates – HL: %d coins, dYdX: %d coins",
+                len(hl_rates),
+                len(dydx_rates),
+            )
             return
 
         # 3. Log current rate comparison
@@ -604,16 +636,22 @@ class CrossExchangeArbStrategy:
                 if spread > 0:
                     # HL rate > dYdX → SHORT HL, LONG dYdX
                     await self.open_position(
-                        coin, ArbSide.SHORT_HL_LONG_BINANCE,
-                        hl["rate_hourly"], dydx["rate_hourly"],
-                        hl["mark_px"], dydx["mark_px"],
+                        coin,
+                        ArbSide.SHORT_HL_LONG_BINANCE,
+                        hl["rate_hourly"],
+                        dydx["rate_hourly"],
+                        hl["mark_px"],
+                        dydx["mark_px"],
                     )
                 else:
                     # dYdX rate > HL → LONG HL, SHORT dYdX
                     await self.open_position(
-                        coin, ArbSide.LONG_HL_SHORT_BINANCE,
-                        hl["rate_hourly"], dydx["rate_hourly"],
-                        hl["mark_px"], dydx["mark_px"],
+                        coin,
+                        ArbSide.LONG_HL_SHORT_BINANCE,
+                        hl["rate_hourly"],
+                        dydx["rate_hourly"],
+                        hl["mark_px"],
+                        dydx["mark_px"],
                     )
 
     async def _check_existing_positions(self) -> None:
@@ -667,7 +705,9 @@ class CrossExchangeArbStrategy:
 
             # 4. Emergency loss stop (based on price divergence)
             if hl_price > 0 and pos.hl_entry_price > 0:
-                price_divergence = abs(hl_price - pos.hl_entry_price) / pos.hl_entry_price
+                price_divergence = (
+                    abs(hl_price - pos.hl_entry_price) / pos.hl_entry_price
+                )
                 if price_divergence > self.config.MAX_LOSS_PCT:
                     should_close = True
                     reason = (

@@ -158,9 +158,7 @@ class TestOpenPositionWithSpotHedge:
         pos = strategy._positions[pid]
         assert pos.spot_hedge_enabled is False
 
-    async def test_hedge_disabled_no_hedge(
-        self, config_no_hedge, mock_api, mock_db
-    ):
+    async def test_hedge_disabled_no_hedge(self, config_no_hedge, mock_api, mock_db):
         """When hedge disabled, no spot hedge even for eligible coins."""
         s = FundingRateArbStrategy(config_no_hedge, mock_api, mock_db)
         pid = await s.open_position(
@@ -288,9 +286,7 @@ class TestLiveSpotOrders:
             SPOT_ELIGIBLE_COINS=["BTC"],
         )
         # Mock get_balance for position sizing
-        mock_api.get_balance = AsyncMock(
-            return_value={"account_value": "10000.0"}
-        )
+        mock_api.get_balance = AsyncMock(return_value={"account_value": "10000.0"})
 
         s = FundingRateArbStrategy(config, mock_api, mock_db)
         # Patch _get_available_capital to avoid live API call

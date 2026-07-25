@@ -2,10 +2,11 @@
 Configuration and data models for the trading bot
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Optional
+from uuid import uuid4
 
 from hyperliquid.utils import constants
 
@@ -32,7 +33,7 @@ class OrderStatus(Enum):
 
 @dataclass
 class Position:
-    """Open position tracking"""
+    """Locally tracked exposure and its durable execution lifecycle."""
 
     side: Side
     entry_price: float
@@ -45,6 +46,25 @@ class Position:
     cloid: Optional[str] = None
     status: OrderStatus = OrderStatus.OPEN
     unrealized_pnl: float = 0.0
+    id: str = field(default_factory=lambda: uuid4().hex)
+    asset: str = ""
+    execution_state: str = "open"
+    exit_oid: Optional[int] = None
+    exit_cloid: Optional[str] = None
+    exit_reason: Optional[str] = None
+    confirmed_quantity: float = 0.0
+    remaining_quantity: Optional[float] = None
+    last_exchange_observation: Optional[datetime] = None
+
+    def __post_init__(self) -> None:
+        if self.remaining_quantity is None:
+            self.remaining_quantity = self.quantity
+        if self.confirmed_quantity == 0.0 and self.execution_state == "open":
+            self.confirmed_quantity = self.quantity
+
+    @property
+    def is_exit_pending(self) -> bool:
+        return self.execution_state == "exit_requested"
 
 
 @dataclass
@@ -88,9 +108,17 @@ class BotConfig(BaseStrategyConfig):
 
     @property
     def WS_URL(self) -> str:
+        override = getattr(self, "_ws_url_override", None)
+        if override:
+            return override
         if self.USE_TESTNET:
             return "wss://api.hyperliquid-testnet.xyz/ws"
         return "wss://api.hyperliquid.xyz/ws"
+
+    @WS_URL.setter
+    def WS_URL(self, value: str) -> None:
+        """Permit controlled WebSocket overrides for isolated integration tests."""
+        self._ws_url_override = value
 
     # Asset index
     ASSET_INDEX: int = 0
@@ -141,6 +169,8 @@ class BotConfig(BaseStrategyConfig):
         "POSITION_SIZE_PCT",
         "MAX_POSITIONS",
         "MAX_DAILY_TRADES",
+        "MAX_POSITION_NOTIONAL_PCT",
+        "MAX_POSITION_NOTIONAL_USD",
         "MAX_DAILY_LOSS_PCT",
         "MAX_LOSS_PCT",
         "EMERGENCY_SHUTDOWN",

@@ -13,6 +13,42 @@ from ..core.config import BotConfig, Side
 logger = logging.getLogger(__name__)
 
 
+def calculate_stop_risk_quantity(
+    config: BotConfig,
+    capital: float,
+    entry_price: float,
+    stop_price: float,
+) -> float:
+    """Size an order from intended loss at its stop, never from leverage.
+
+    Leverage determines margin feasibility at the exchange; it must not enlarge
+    the quantity whose stop-loss can consume the configured account-risk budget.
+    The notional ceilings additionally keep a wide stop from producing an
+    impractically large exposure.
+    """
+    values = (capital, entry_price, stop_price, config.RISK_PER_TRADE_PCT)
+    if not all(np.isfinite(value) and value > 0 for value in values):
+        raise ValueError(
+            "Capital, entry, stop, and risk must be finite positive values"
+        )
+
+    stop_distance = abs(entry_price - stop_price)
+    if stop_distance <= 0:
+        return 0.0
+
+    risk_budget = capital * config.RISK_PER_TRADE_PCT
+    risk_quantity = risk_budget / stop_distance
+    notional_cap = min(
+        capital * config.MAX_POSITION_NOTIONAL_PCT,
+        config.MAX_POSITION_NOTIONAL_USD,
+    )
+    if notional_cap <= 0:
+        raise ValueError("Position notional caps must be positive")
+
+    capped_quantity = min(risk_quantity, notional_cap / entry_price)
+    return float(capped_quantity)
+
+
 class StrategyEngine:
     """
     Signal generation using Ultra-Optimized Momentum strategy.
@@ -132,7 +168,7 @@ class StrategyEngine:
             tp_price = current_price + (atr * self.config.TP_ATR_MULTIPLIER)
             sl_price = current_price - (atr * self.config.SL_ATR_MULTIPLIER)
 
-            quantity = self._calculate_position_size(capital, current_price, atr)
+            quantity = self._calculate_position_size(capital, current_price, sl_price)
 
             signal = {
                 "action": Side.LONG,
@@ -148,7 +184,7 @@ class StrategyEngine:
             tp_price = current_price - (atr * self.config.TP_ATR_MULTIPLIER)
             sl_price = current_price + (atr * self.config.SL_ATR_MULTIPLIER)
 
-            quantity = self._calculate_position_size(capital, current_price, atr)
+            quantity = self._calculate_position_size(capital, current_price, sl_price)
 
             signal = {
                 "action": Side.SHORT,
@@ -183,18 +219,12 @@ class StrategyEngine:
         return float(atr) if not np.isnan(atr) else 0.001
 
     def _calculate_position_size(
-        self, capital: float, price: float, atr: float
+        self, capital: float, entry_price: float, stop_price: float
     ) -> float:
-        """
-        Calculate position size based on risk parameters
-
-        Uses the formula: margin = capital * risk_pct, notional = margin * leverage
-        """
-        margin = capital * self.config.RISK_PER_TRADE_PCT
-        notional = margin * self.config.LEVERAGE
-        quantity = notional / price
-
-        return float(quantity)
+        """Return size whose loss at ``stop_price`` fits the risk budget."""
+        return calculate_stop_risk_quantity(
+            self.config, capital, entry_price, stop_price
+        )
 
     def get_signals_count(self) -> int:
         """Get total number of signals generated"""
@@ -269,21 +299,9 @@ class RiskManager:
         Returns:
             Position quantity
         """
-        risk_amount = capital * self.config.RISK_PER_TRADE_PCT
-        price_risk = abs(entry_price - stop_price) / entry_price
-
-        if price_risk == 0:
-            return 0
-
-        # Calculate position size based on risk
-        position_value = risk_amount / price_risk
-
-        # Apply leverage
-        notional = position_value * self.config.LEVERAGE
-
-        quantity = notional / entry_price
-
-        return float(quantity)
+        return calculate_stop_risk_quantity(
+            self.config, capital, entry_price, stop_price
+        )
 
     def reset_daily(self):
         """Reset daily tracking"""

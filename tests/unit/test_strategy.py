@@ -99,7 +99,7 @@ class TestStrategyEngine:
         """Test position size calculation"""
         capital = 10000
         entry_price = 100
-        stop_price = 98  # Note: stop_price is not used in current implementation
+        stop_price = 98
 
         quantity = strategy_engine._calculate_position_size(
             capital, entry_price, stop_price
@@ -108,13 +108,20 @@ class TestStrategyEngine:
         assert quantity > 0
         assert isinstance(quantity, float)
 
-        # The actual formula is: margin = capital * risk_pct, notional = margin * leverage
-        # quantity = notional / price
-        margin = capital * strategy_engine.config.RISK_PER_TRADE_PCT
-        notional = margin * strategy_engine.config.LEVERAGE
-        expected_quantity = notional / entry_price
-
-        assert abs(quantity - expected_quantity) < 0.01
+        # Risk is loss at stop, capped by the configured notional ceiling.
+        risk_quantity = (
+            capital
+            * strategy_engine.config.RISK_PER_TRADE_PCT
+            / abs(entry_price - stop_price)
+        )
+        notional_cap_quantity = (
+            min(
+                capital * strategy_engine.config.MAX_POSITION_NOTIONAL_PCT,
+                strategy_engine.config.MAX_POSITION_NOTIONAL_USD,
+            )
+            / entry_price
+        )
+        assert quantity == min(risk_quantity, notional_cap_quantity)
 
     def test_signal_tracking(self, strategy_engine, sample_candles):
         """Test signal count tracking"""

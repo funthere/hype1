@@ -26,6 +26,7 @@ from typing import Dict, List
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src.core.config import BotConfig, Side, Position, Trade
+from src.core.safety import require_mainnet_release_approval
 from src.core.strategy import StrategyEngine
 from src.core.multi_asset import (
     AssetConfig,
@@ -439,6 +440,13 @@ def parse_args():
 async def main():
     """Main entry point"""
     args = parse_args()
+
+    if args.mode == "mainnet":
+        try:
+            require_mainnet_release_approval("Multi-asset strategy")
+        except RuntimeError as exc:
+            logger.critical("%s", exc)
+            return
 
     # Validate weights
     if args.weights and len(args.weights) != len(args.assets):
