@@ -11,17 +11,12 @@ mode: paper
 paper_capital: 10000.0
 
 # --- Coins to trade ---
+# Majors only: thin orderbooks on small caps make price impact exceed the
+# funding edge (see EVALUATION.md).
 coins:
   - BTC
   - ETH
   - SOL
-  - TST
-  - UNI
-  - W
-  - ZEN
-  - XRP
-  - TON
-  - TRUMP
 
 # --- Funding rate thresholds (per-hour basis) ---
 # Both exchanges report per-8h; converted to hourly internally.
@@ -52,13 +47,6 @@ binance_markets:
   BTC: BTCUSDT
   ETH: ETHUSDT
   SOL: SOLUSDT
-  TST: TSTUSDT
-  UNI: UNIUSDT
-  W: WUSDT
-  ZEN: ZENUSDT
-  XRP: XRPUSDT
-  TON: TONUSDT
-  TRUMP: TRUMPUSDT
 
 # --- HyperLiquid API ---
 hl_base_url: "https://api.hyperliquid.xyz"

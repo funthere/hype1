@@ -6,10 +6,17 @@ using a combination of EMA crossovers, ADX trend strength, and ATR-based
 position management.
 
 Strategy:
-  - ENTER LONG when fast EMA > slow EMA, ADX > threshold, and pullback confirmed
-  - ENTER SHORT when fast EMA < slow EMA, ADX > threshold, and pullback confirmed
+  - ENTER LONG when fast EMA > slow EMA, price above trend EMA, and price
+    pulls back to the fast EMA (within PULLBACK_ATR_MULT)
+  - ENTER SHORT when fast EMA < slow EMA, price below trend EMA, and price
+    pulls back to the fast EMA
   - EXIT on trailing stop, stop loss, take profit, or max hold time
   - Risk managed with ATR-based stops and position sizing
+
+Entries are pullback-to-trend, not fresh crossovers: an EMA crossover is a
+lagging signal that fires after the move has started (see EVALUATION.md);
+entering on the retracement towards the fast EMA buys weakness in an
+established trend instead of chasing strength at the cross.
 """
 
 import asyncio
@@ -24,6 +31,7 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from ..analytics import StrategyScorecard
 from ..core.base_config import BaseStrategyConfig
 from ..core.config import Side, Trade
 from ..execution import MarketDataGateway
@@ -226,6 +234,11 @@ class TrendFollowingStrategy:
 
         # Cooldown tracker: coin -> timestamp of last close
         self._coin_cooldowns: Dict[str, float] = {}
+
+        # Decision analytics: rolling expectancy/PF/drawdown with a retire rule
+        self.scorecard = StrategyScorecard(
+            "trend_following", initial_capital=config.PAPER_CAPITAL
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -489,7 +502,7 @@ class TrendFollowingStrategy:
                     },
                 )
 
-                # Save trade to trades table
+                # Save trade to trades table and feed the scorecard
                 try:
                     fee = abs(pos.notional) * self.config.TAKER_FEE_PCT
                     trade = Trade(
@@ -507,6 +520,7 @@ class TrendFollowingStrategy:
                         fees=fee,
                         notes=f"{pos.coin} {reason}",
                     )
+                    self.scorecard.record(trade)
                     self.db.save_trade(trade)
                 except Exception as trade_exc:
                     logger.error("Failed to save trade to DB: %s", trade_exc)
@@ -695,6 +709,9 @@ class TrendFollowingStrategy:
         ]
         total_pnl = sum(p.realized_pnl for p in closed_positions)
 
+        snapshot = self.scorecard.snapshot()
+        retire, retire_reason = self.scorecard.should_retire()
+
         return {
             "cycle": self._cycle_count,
             "capital": self._paper_capital if self.config.PAPER_TRADING else None,
@@ -720,6 +737,18 @@ class TrendFollowingStrategy:
                 "total_pnl": round(total_pnl, 4),
                 "open_count": len(open_positions),
                 "closed_count": len(closed_positions),
+                "scorecard": {
+                    "trades": snapshot.total_trades,
+                    "expectancy": round(snapshot.expectancy, 4),
+                    "profit_factor": (
+                        round(snapshot.profit_factor, 2)
+                        if snapshot.profit_factor != float("inf")
+                        else None
+                    ),
+                    "max_drawdown_pct": round(snapshot.max_drawdown_pct, 4),
+                    "retire_recommended": retire,
+                    "retire_reason": retire_reason,
+                },
             },
         }
 
@@ -895,24 +924,19 @@ class TrendFollowingStrategy:
             current_fast = fast_ema.iloc[-1]
             current_slow = slow_ema.iloc[-1]
             current_trend = trend_ema.iloc[-1]
-            prev_fast = fast_ema.iloc[-2]
-            prev_slow = slow_ema.iloc[-2]
 
             side = None
 
-            # --- LONG: fast EMA crosses above slow EMA, price above trend EMA ---
+            # --- Trend alignment, not a fresh crossover: enter on pullbacks
+            # into an established trend rather than chasing the cross.
             if (
-                current_fast > current_slow
-                and prev_fast <= prev_slow  # Crossover just happened
-                and current_price > current_trend
+                current_fast > current_slow and current_price > current_trend
             ):  # Higher timeframe trend up
                 side = TrendPositionSide.LONG
 
-            # --- SHORT: fast EMA crosses below slow EMA, price below trend EMA ---
+            # --- SHORT: fast EMA below slow EMA, price below trend EMA ---
             elif (
-                current_fast < current_slow
-                and prev_fast >= prev_slow  # Crossover just happened
-                and current_price < current_trend
+                current_fast < current_slow and current_price < current_trend
             ):  # Higher timeframe trend down
                 side = TrendPositionSide.SHORT
 

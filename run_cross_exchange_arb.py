@@ -77,7 +77,7 @@ logger = logging.getLogger("cross_arb_runner")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Cross-Exchange Funding Rate Arbitrage (HyperLiquid vs dYdX)"
+        description="Cross-Exchange Funding Rate Arbitrage (HyperLiquid vs Binance)"
     )
     parser.add_argument(
         "--config",
@@ -107,7 +107,7 @@ def parse_args() -> argparse.Namespace:
 
 def build_rate_table(
     hl_rates: dict,
-    dydx_rates: dict,
+    binance_rates: dict,
     open_coins: set,
     config: CrossExchangeArbConfig,
 ) -> Table:
@@ -119,29 +119,29 @@ def build_rate_table(
     )
     table.add_column("Coin", style="bold")
     table.add_column("HL Rate", justify="right")
-    table.add_column("dYdX Rate", justify="right")
+    table.add_column("Binance Rate", justify="right")
     table.add_column("Spread", justify="right")
     table.add_column("Signal", justify="center")
     table.add_column("Status", justify="center")
 
     for coin in config.COINS:
         hl = hl_rates.get(coin, {})
-        dydx = dydx_rates.get(coin, {})
+        binance = binance_rates.get(coin, {})
 
         hl_rate = hl.get("rate_hourly", 0.0)
-        dydx_rate = dydx.get("rate_hourly", 0.0)
-        spread = hl_rate - dydx_rate
+        binance_rate = binance.get("rate_hourly", 0.0)
+        spread = hl_rate - binance_rate
 
         hl_style = "red" if hl_rate > 0 else "green"
-        dydx_style = "red" if dydx_rate > 0 else "green"
+        binance_style = "red" if binance_rate > 0 else "green"
         spread_style = "yellow" if abs(spread) >= config.ENTRY_THRESHOLD else ""
 
         # Signal
         if abs(spread) >= config.ENTRY_THRESHOLD:
             if spread > 0:
-                signal = "SHORT HL / LONG dYdX"
+                signal = "SHORT HL / LONG Binance"
             else:
-                signal = "LONG HL / SHORT dYdX"
+                signal = "LONG HL / SHORT Binance"
             signal_style = "bold yellow"
         else:
             signal = "—"
@@ -154,7 +154,7 @@ def build_rate_table(
         table.add_row(
             coin,
             f"[{hl_style}]{hl_rate * 100:.4f}%[/{hl_style}]",
-            f"[{dydx_style}]{dydx_rate * 100:.4f}%[/{dydx_style}]",
+            f"[{binance_style}]{binance_rate * 100:.4f}%[/{binance_style}]",
             f"[{spread_style}]{spread * 100:.4f}%[/{spread_style}]",
             f"[{signal_style}]{signal}[/{signal_style}]" if signal_style else signal,
             f"[{status_style}]{status}[/{status_style}]" if status_style else status,
@@ -174,7 +174,7 @@ def build_positions_table(status: dict) -> Table:
     table.add_column("Coin", style="bold")
     table.add_column("Direction", justify="center")
     table.add_column("HL Qty", justify="right")
-    table.add_column("dYdX Qty", justify="right")
+    table.add_column("Binance Qty", justify="right")
     table.add_column("Entry Spread", justify="right")
     table.add_column("Funding $", justify="right", style="green")
     table.add_column("Hold (h)", justify="right")
@@ -189,9 +189,9 @@ def build_positions_table(status: dict) -> Table:
         table.add_row(
             p["id"],
             p["coin"],
-            f"HL:{p['hl_side']} / dYdX:{p['dydx_side']}",
+            f"HL:{p['hl_side']} / Binance:{p['binance_side']}",
             f"{p['hl_quantity']:.6f}",
-            f"{p['dydx_quantity']:.6f}",
+            f"{p['binance_quantity']:.6f}",
             spread_display,
             funding_display,
             f"{p['hold_hours']:.1f}",
@@ -313,14 +313,14 @@ async def run_strategy(config: CrossExchangeArbConfig) -> None:
 
     # --- Display loop ---
     latest_hl_rates: dict = {}
-    latest_dydx_rates: dict = {}
+    latest_binance_rates: dict = {}
 
     async def _display_loop() -> None:
-        nonlocal latest_hl_rates, latest_dydx_rates
+        nonlocal latest_hl_rates, latest_binance_rates
         while not shutdown_event.is_set():
             try:
                 latest_hl_rates = await strategy.fetch_hl_funding_rates()
-                latest_dydx_rates = await strategy.fetch_binance_funding_rates()
+                latest_binance_rates = await strategy.fetch_binance_funding_rates()
 
                 open_coins = {
                     p["coin"] for p in strategy.get_status()["positions"]["open"]
@@ -330,7 +330,7 @@ async def run_strategy(config: CrossExchangeArbConfig) -> None:
                 console.print(build_summary_panel(strategy, config))
                 console.print(
                     build_rate_table(
-                        latest_hl_rates, latest_dydx_rates, open_coins, config
+                        latest_hl_rates, latest_binance_rates, open_coins, config
                     )
                 )
                 console.print(build_positions_table(strategy.get_status()))

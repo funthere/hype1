@@ -379,8 +379,9 @@ async def run_strategy(config: FundingArbConfig) -> None:
         nonlocal latest_rates
         while not shutdown_event.is_set():
             try:
-                # Fetch latest rates for display
-                rates = await strategy.scan_funding_rates()
+                # Reuse the strategy's most recent scan instead of issuing a
+                # second scan stream against the API rate limits.
+                rates = strategy.last_opportunities
                 if rates:
                     latest_rates = rates
                     latest_rates.sort(

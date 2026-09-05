@@ -374,3 +374,112 @@ class TestCreateDefaultMultiAssetConfig:
 
         assert len(assets) == 2
         assert all(a.weight == 1.0 for a in assets)  # Default is still 1.0
+
+
+class TestReturnBasedCorrelation:
+    """Regression: correlation must be computed on returns, not price levels."""
+
+    def _feed(self, filter, series):
+        for i in range(len(series["A"])):
+            filter.update_price("A", series["A"][i])
+            filter.update_price("B", series["B"][i])
+
+    def test_identical_returns_are_perfectly_correlated(self):
+        f = CorrelationFilter(window=10)
+        rng = np.random.default_rng(7)
+        rets = rng.normal(0.001, 0.01, 40)
+        self._feed(
+            f,
+            {
+                "A": list(100 * np.cumprod(1 + rets)),
+                "B": list(50 * np.cumprod(1 + rets)),
+            },
+        )
+        corr = f.get_correlation("A", "B")
+        assert corr is not None and corr > 0.99
+
+    def test_levels_uncorrelated_but_returns_anticorrelated(self):
+        """Two assets that both drift up with opposite wiggles: level
+        correlation reads ~1.0, return correlation is negative."""
+        f = CorrelationFilter(window=10)
+        wiggle = [0.01, -0.01] * 30
+        a = [100.0]
+        b = [200.0]
+        for w in wiggle:
+            a.append(a[-1] * (1 + 0.001 + w))
+            b.append(b[-1] * (1 + 0.001 - w))
+        self._feed(f, {"A": a, "B": b})
+        corr = f.get_correlation("A", "B")
+        assert corr is not None and corr < 0.0
+
+    def test_constant_returns_yield_zero_correlation(self):
+        """Two steady geometric uptrends have perfectly correlated levels but
+        zero return variance, so return correlation is 0.0, not noise."""
+        f = CorrelationFilter(window=10)
+        self._feed(
+            f,
+            {
+                "A": [100.0 * (1.01**i) for i in range(30)],
+                "B": [50.0 * (1.02**i) for i in range(30)],
+            },
+        )
+        assert f.get_correlation("A", "B") == 0.0
+
+
+class TestVolatilityAllocations:
+    """RISK_PARITY and VOLATILITY_TARGET must produce real weights."""
+
+    @staticmethod
+    def _strategy(method, **kwargs):
+        base_config = type("Cfg", (), {"RISK_PER_TRADE_PCT": 0.01, "LEVERAGE": 2})()
+        assets = [AssetConfig(symbol="LOW"), AssetConfig(symbol="HIGH")]
+        return MultiAssetStrategy(
+            base_config, assets, allocation_method=method, **kwargs
+        )
+
+    @staticmethod
+    def _feed_prices(strategy):
+        # LOW wiggles ±0.1% per step, HIGH swings ±2% per step
+        low, high = [100.0], [100.0]
+        for i in range(80):
+            sign = 1.0 if i % 2 == 0 else -1.0
+            low.append(low[-1] * (1 + sign * 0.001))
+            high.append(high[-1] * (1 + sign * 0.02))
+        for price in low:
+            strategy.update_asset_price("LOW", price)
+        for price in high:
+            strategy.update_asset_price("HIGH", price)
+
+    def test_risk_parity_weights_inverse_to_volatility(self):
+        strategy = self._strategy(AssetAllocationMethod.RISK_PARITY)
+        self._feed_prices(strategy)
+
+        allocs = strategy.allocations
+        assert abs(sum(allocs.values()) - 1.0) < 1e-9
+        assert allocs["LOW"] > 0.8  # low-vol asset dominates risk contribution
+        assert allocs["HIGH"] < allocs["LOW"]
+
+    def test_volatility_target_caps_hot_assets(self):
+        strategy = self._strategy(
+            AssetAllocationMethod.VOLATILITY_TARGET, volatility_target=0.005
+        )
+        self._feed_prices(strategy)
+
+        allocs = strategy.allocations
+        assert abs(sum(allocs.values()) - 1.0) < 1e-9
+        # LOW vol (~0.1%) is under target → full weight; HIGH (~2%) is capped
+        # at 0.005/0.02 = 0.25 of LOW's contribution → 1.0 vs 0.25 normalized
+        assert abs(allocs["LOW"] - 0.8) < 0.05
+        assert abs(allocs["HIGH"] - 0.2) < 0.05
+
+    def test_equal_weight_ignores_recalculation(self):
+        strategy = self._strategy(AssetAllocationMethod.EQUAL_WEIGHT)
+        self._feed_prices(strategy)
+        assert strategy.allocations["LOW"] == 0.5
+        assert strategy.allocations["HIGH"] == 0.5
+
+    def test_insufficient_history_keeps_equal_weights(self):
+        strategy = self._strategy(AssetAllocationMethod.RISK_PARITY)
+        for i in range(10):
+            strategy.update_asset_price("LOW", 100 + i)
+        assert strategy.allocations["LOW"] == 0.5

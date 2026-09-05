@@ -12,12 +12,14 @@ Strategy:
 """
 
 import asyncio
+import json
 import logging
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 from ..core.base_config import BaseStrategyConfig
@@ -78,6 +80,9 @@ class FundingArbConfig(BaseStrategyConfig):
     SPOT_HEDGE_ENABLED: bool = True
     # Coins that have liquid spot markets on HyperLiquid
     SPOT_ELIGIBLE_COINS: Optional[List[str]] = None  # populated in __post_init__
+
+    # Persist paper capital across restarts so an experiment survives a crash
+    PERSIST_PAPER_CAPITAL: bool = True
 
     # API URLs (set at runtime)
     API_URL: str = "https://api.hyperliquid.xyz"
@@ -201,9 +206,57 @@ class FundingRateArbStrategy:
         self._running: bool = False
         self._cycle_count: int = 0
         self._last_scan_time: float = 0.0
+        # Most recent scan results, for display surfaces that must not issue
+        # their own API scans on top of the strategy loop.
+        self._last_opportunities: List[Dict[str, Any]] = []
 
         # For paper mode capital tracking
         self._paper_capital: float = config.PAPER_CAPITAL
+        self._paper_state_path: Optional[Path] = None
+        if config.PAPER_TRADING and config.PERSIST_PAPER_CAPITAL:
+            self._paper_state_path = self._resolve_paper_state_path(config)
+            self._load_paper_capital()
+
+    @staticmethod
+    def _resolve_paper_state_path(config: FundingArbConfig) -> Optional[Path]:
+        """State file sits next to the database; None when persistence is off."""
+        if not config.DATABASE_PATH or config.DATABASE_PATH == ":memory:":
+            return None
+        return Path(str(config.DATABASE_PATH) + ".paper_state.json")
+
+    def _load_paper_capital(self) -> None:
+        """Restore paper capital saved by a previous run, if any."""
+        path = self._paper_state_path
+        if path is None or not path.exists():
+            return
+        try:
+            saved = json.loads(path.read_text()).get("paper_capital")
+            if isinstance(saved, (int, float)) and saved > 0:
+                self._paper_capital = float(saved)
+                logger.info(
+                    "Restored paper capital %.4f from %s", self._paper_capital, path
+                )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Could not restore paper capital from %s: %s", path, exc)
+
+    def _save_paper_capital(self) -> None:
+        """Persist paper capital so restarts do not reset the experiment."""
+        path = self._paper_state_path
+        if path is None:
+            return
+        try:
+            path.write_text(
+                json.dumps(
+                    {"paper_capital": self._paper_capital, "saved_at": time.time()}
+                )
+            )
+        except OSError as exc:
+            logger.warning("Could not persist paper capital to %s: %s", path, exc)
+
+    @property
+    def last_opportunities(self) -> List[Dict[str, Any]]:
+        """Funding opportunities from the most recent scan (read-only copy)."""
+        return list(self._last_opportunities)
 
     # ------------------------------------------------------------------
     # Public API
@@ -274,6 +327,7 @@ class FundingRateArbStrategy:
                 )
 
             self._last_scan_time = time.time()
+            self._last_opportunities = opportunities
             logger.debug("Scanned funding rates for %d assets", len(opportunities))
             return opportunities
 
@@ -331,6 +385,12 @@ class FundingRateArbStrategy:
             # Round quantity to 4 decimal places (most perps)
             quantity = round(quantity, 4)
             if quantity <= 0:
+                logger.info(
+                    "Skipping %s: quantity rounds to zero (notional=%.2f px=%.2f)",
+                    coin,
+                    notional,
+                    mark_px,
+                )
                 return None
 
             position_id = str(uuid.uuid4())[:8]
@@ -339,6 +399,7 @@ class FundingRateArbStrategy:
                 # Simulate entry (apply taker fee)
                 fee = notional * self.config.TAKER_FEE_PCT
                 self._paper_capital -= fee
+                self._save_paper_capital()
                 logger.info(
                     "[PAPER] OPEN %s %s | side=%s qty=%.4f px=%.2f rate=%.6f fee=%.4f",
                     position_id,
@@ -453,6 +514,7 @@ class FundingRateArbStrategy:
             if self.config.PAPER_TRADING:
                 fee = abs(pos.notional) * self.config.TAKER_FEE_PCT
                 self._paper_capital += price_pnl - fee
+                self._save_paper_capital()
                 realized_pnl -= fee
                 logger.info(
                     "[PAPER] CLOSE %s %s | reason=%s pnl=%.4f funding=%.4f net=%.4f",
@@ -616,9 +678,21 @@ class FundingRateArbStrategy:
 
             if rate > self.config.ENTRY_THRESHOLD:
                 # High positive rate → SHORT (longs pay shorts)
+                logger.debug(
+                    "Entry signal %s SHORT rate=%.6f > threshold=%.6f",
+                    coin,
+                    rate,
+                    self.config.ENTRY_THRESHOLD,
+                )
                 await self.open_position(coin, PositionSide.SHORT, rate, mark_px)
             elif rate < -self.config.ENTRY_THRESHOLD:
                 # High negative rate → LONG (shorts pay longs)
+                logger.debug(
+                    "Entry signal %s LONG rate=%.6f < -threshold=%.6f",
+                    coin,
+                    rate,
+                    self.config.ENTRY_THRESHOLD,
+                )
                 await self.open_position(coin, PositionSide.LONG, rate, mark_px)
 
     async def run(self) -> None:
@@ -794,6 +868,7 @@ class FundingRateArbStrategy:
             if self.config.PAPER_TRADING:
                 fee = pos.notional * self.config.TAKER_FEE_PCT
                 self._paper_capital -= fee
+                self._save_paper_capital()
                 logger.info(
                     "[PAPER] SPOT BUY %s | qty=%.4f px=%.2f fee=%.4f",
                     pos.coin,
@@ -858,6 +933,7 @@ class FundingRateArbStrategy:
                     self._paper_capital += (
                         pos.spot_quantity * pos.spot_entry_price + spot_pnl
                     )
+                    self._save_paper_capital()
                     logger.info(
                         "[PAPER] SPOT SELL %s | qty=%.4f px=%.2f spot_pnl=%.4f",
                         pos.coin,
