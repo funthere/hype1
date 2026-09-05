@@ -294,6 +294,44 @@ class HyperliquidAPI:
             logger.error(f"Failed to get mids: {e}")
             return {}
 
+    async def get_meta_and_asset_ctxs(self) -> tuple:
+        """Get universe metadata and per-asset market context.
+
+        Returns the raw ``(meta, asset_ctxs)`` pair; callers parse it for
+        their own needs (coin universe, funding rates, mark prices).
+        Raises on failure so callers can distinguish an outage from empty
+        data.
+        """
+        raw = await retry_with_backoff(
+            lambda: asyncio.to_thread(self.info.meta_and_asset_ctxs)
+        )
+        if not raw or len(raw) < 2:
+            raise ValueError("meta_and_asset_ctxs returned unexpected format")
+        return raw
+
+    async def get_candles(
+        self,
+        coin: str,
+        interval: str,
+        start_time_ms: int,
+        end_time_ms: int,
+    ) -> list:
+        """Get candlestick snapshots for a coin in [start_time_ms, end_time_ms].
+
+        Returns a list of raw candle dicts (keys: t, T, s, i, o, c, h, l, v, n).
+        Raises on failure so callers can distinguish an outage from empty data.
+        """
+        raw = await retry_with_backoff(
+            lambda: asyncio.to_thread(
+                self.info.candles_snapshot,
+                coin,
+                interval,
+                start_time_ms,
+                end_time_ms,
+            )
+        )
+        return list(raw) if raw else []
+
     async def get_funding_rate(self, coin: Optional[str] = None) -> Dict:
         """Get funding rate for a specific asset.
 

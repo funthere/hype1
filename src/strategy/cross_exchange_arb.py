@@ -24,9 +24,9 @@ from enum import Enum
 from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 import yaml
-from hyperliquid.info import Info
 
 from ..core.base_config import BaseStrategyConfig
+from ..execution import MarketDataGateway
 
 logger = logging.getLogger(__name__)
 
@@ -237,11 +237,13 @@ class CrossExchangeArbStrategy:
     def __init__(
         self,
         config: CrossExchangeArbConfig,
-        hl_info: Info,
+        market_data: MarketDataGateway,
         db: Any,
     ) -> None:
         self.config = config
-        self.hl_info = hl_info
+        # Hyperliquid market data arrives through the gateway port; the
+        # exchange SDK stays behind the src/exchange adapters.
+        self._market_data = market_data
         self.db = db
 
         self._positions: Dict[str, ArbPosition] = {}
@@ -275,7 +277,7 @@ class CrossExchangeArbStrategy:
         HL funding rate is per-8h; we convert to per-hour.
         """
         try:
-            raw: tuple = await asyncio.to_thread(self.hl_info.meta_and_asset_ctxs)
+            raw = await self._market_data.get_meta_and_asset_ctxs()
             if not raw or len(raw) < 2:
                 return {}
 

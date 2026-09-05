@@ -1,6 +1,6 @@
 """Execution lifecycle domain package."""
 
-from .gateway import InMemoryGateway, TradingGateway
+from .gateway import InMemoryGateway, MarketDataGateway, TradingGateway
 from .models import (
     ExchangePosition,
     ExecutionState,
@@ -16,6 +16,7 @@ __all__ = [
     "ExecutionState",
     "Fill",
     "InMemoryGateway",
+    "MarketDataGateway",
     "OrderRequest",
     "OrderSubmission",
     "PositionRead",

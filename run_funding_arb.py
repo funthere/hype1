@@ -358,7 +358,7 @@ async def run_strategy(config: FundingArbConfig) -> None:
     db = DatabaseManager(config.DATABASE_PATH)
 
     # --- Create strategy ---
-    strategy = FundingRateArbStrategy(config, api, db)
+    strategy = FundingRateArbStrategy(config, api, db, market_data=api)
 
     # --- Graceful shutdown handler ---
     shutdown_event = asyncio.Event()

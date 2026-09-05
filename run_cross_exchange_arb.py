@@ -35,10 +35,10 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 
-from hyperliquid.info import Info
-
+from src.core.config import BotConfig
 from src.core.safety import require_mainnet_release_approval
 from src.exchange.binance_client import BinanceClient
+from src.exchange.connector import HyperliquidAPI
 from src.storage.database import DatabaseManager
 from src.strategy.cross_exchange_arb import (
     CrossExchangeArbConfig,
@@ -271,8 +271,17 @@ async def run_strategy(config: CrossExchangeArbConfig) -> None:
         )
     )
 
-    # --- Initialise HyperLiquid Info (read-only for data) ---
-    hl_info = Info(config.HL_BASE_URL, skip_ws=True)
+    # --- Initialise HyperLiquid gateway (read-only market data) ---
+    bot_config = BotConfig(
+        PAPER_TRADING=config.PAPER_TRADING,
+        USE_TESTNET=config.USE_TESTNET,
+        # Market data is public; a dummy key keeps paper mode credential-free
+        PRIVATE_KEY=config.PRIVATE_KEY
+        or "0x0000000000000000000000000000000000000000000000000000000000000001",
+        ADDRESS=config.ADDRESS or "0x0000000000000000000000000000000000000001",
+        ACCOUNT_ADDRESS=config.ACCOUNT_ADDRESS,
+    )
+    market_data = HyperliquidAPI(bot_config)
 
     # --- Initialise Binance client ---
     binance = BinanceClient(base_url=config.BINANCE_BASE_URL)
@@ -288,7 +297,7 @@ async def run_strategy(config: CrossExchangeArbConfig) -> None:
     db = DatabaseManager(config.DATABASE_PATH)
 
     # --- Create strategy ---
-    strategy = CrossExchangeArbStrategy(config, hl_info, db)
+    strategy = CrossExchangeArbStrategy(config, market_data, db)
     strategy.set_binance_client(binance)
 
     # --- Graceful shutdown ---

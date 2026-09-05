@@ -23,10 +23,10 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from hyperliquid.info import Info
 
 from ..core.base_config import BaseStrategyConfig
 from ..core.config import Side, Trade
+from ..execution import MarketDataGateway
 
 logger = logging.getLogger(__name__)
 
@@ -204,16 +204,22 @@ class TrendFollowingStrategy:
         config: TrendFollowingConfig,
         api: Any,
         db: Any,
+        market_data: Optional[MarketDataGateway] = None,
     ) -> None:
         self.config = config
         self.api = api
         self.db = db
+        # Market data arrives through the gateway port. The Hyperliquid
+        # connector implements both contracts, so ``api`` is a valid default;
+        # tests inject a scripted gateway here.
+        self._market_data: MarketDataGateway = (
+            market_data if market_data is not None else api
+        )
 
         self._positions: Dict[str, TrendPosition] = {}
         self._running: bool = False
         self._cycle_count: int = 0
         self._paper_capital: float = config.PAPER_CAPITAL
-        self._info: Optional[Info] = None
 
         # Cache candle data per coin
         self._candle_cache: Dict[str, pd.DataFrame] = {}
@@ -808,22 +814,15 @@ class TrendFollowingStrategy:
         except Exception as exc:
             logger.error("Failed to update daily summary: %s", exc)
 
-    def _get_info(self) -> Info:
-        if self._info is None:
-            self._info = Info(self.config.API_URL, skip_ws=True)
-        return self._info
-
     async def _get_coins(self) -> List[str]:
         """Get list of coins to monitor."""
         if self.config.COINS:
             return self.config.COINS
 
         try:
-            info = self._get_info()
-            raw = await asyncio.to_thread(info.meta_and_asset_ctxs)
-            if raw and len(raw) >= 1:
-                universe = raw[0].get("universe", [])
-                return [u.get("name", "") for u in universe if u.get("name")]
+            meta, _ctxs = await self._market_data.get_meta_and_asset_ctxs()
+            universe = meta.get("universe", [])
+            return [u.get("name", "") for u in universe if u.get("name")]
         except Exception as exc:
             logger.error("Failed to get coin list: %s", exc)
         return []
@@ -831,14 +830,12 @@ class TrendFollowingStrategy:
     async def _fetch_candles(self, coin: str) -> Optional[pd.DataFrame]:
         """Fetch candle data for a coin."""
         try:
-            info = self._get_info()
             # Fetch last 200 candles (startTime/endTime in ms)
             end_time = int(time.time() * 1000)
             # ~200 candles * interval; approximate 1h=3600000ms each
             interval_ms = self._interval_to_ms(self.config.CANDLE_INTERVAL)
             start_time = end_time - (200 * interval_ms)
-            candle_data = await asyncio.to_thread(
-                info.candles_snapshot,
+            candle_data = await self._market_data.get_candles(
                 coin,
                 self.config.CANDLE_INTERVAL,
                 start_time,
