@@ -19,7 +19,7 @@ from src.strategy.funding_rate_arb import (
 
 
 @pytest.fixture
-def config():
+def config(tmp_path):
     """Create a test config with spot hedge enabled."""
     cfg = FundingArbConfig(
         PAPER_TRADING=True,
@@ -31,18 +31,20 @@ def config():
         CHECK_INTERVAL=60,
         SPOT_HEDGE_ENABLED=True,
         SPOT_ELIGIBLE_COINS=["BTC", "ETH", "SOL", "HYPE"],
+        DATABASE_PATH=str(tmp_path / "funding_arb_test.db"),
     )
     cfg.validate()
     return cfg
 
 
 @pytest.fixture
-def config_no_hedge():
+def config_no_hedge(tmp_path):
     """Config with spot hedge disabled."""
     cfg = FundingArbConfig(
         PAPER_TRADING=True,
         PAPER_CAPITAL=10_000.0,
         SPOT_HEDGE_ENABLED=False,
+        DATABASE_PATH=str(tmp_path / "funding_arb_test.db"),
     )
     cfg.validate()
     return cfg
@@ -362,3 +364,92 @@ class TestLiveSpotOrders:
         # Position should exist but NOT be spot hedged
         pos = s._positions[pid]
         assert pos.spot_hedge_enabled is False
+
+
+# ---------------------------------------------------------------------------
+# Paper capital persistence tests
+# ---------------------------------------------------------------------------
+
+
+class TestPaperCapitalPersistence:
+    @pytest.mark.asyncio
+    async def test_capital_restored_across_restart(self, config, mock_api, mock_db):
+        """Closing a position at a loss must persist; a new strategy instance
+        must resume from that capital, not reset to PAPER_CAPITAL."""
+        config.SPOT_HEDGE_ENABLED = False  # isolate the perp leg's PnL
+        strategy = FundingRateArbStrategy(config, mock_api, mock_db)
+        pos_id = await strategy.open_position(
+            "BTC", PositionSide.SHORT, 0.001, 50_000.0
+        )
+        assert pos_id is not None
+
+        closed = await strategy.close_position(pos_id, "rate_reverted", 51_000.0)
+        assert closed is True
+        capital_after = strategy._paper_capital
+        assert capital_after < 10_000.0  # fees + adverse move
+
+        restarted = FundingRateArbStrategy(config, mock_api, mock_db)
+        assert restarted._paper_capital == pytest.approx(capital_after)
+
+    @pytest.mark.asyncio
+    async def test_persistence_disabled_resets_capital(
+        self, tmp_path, mock_api, mock_db
+    ):
+        cfg = FundingArbConfig(
+            PAPER_TRADING=True,
+            PAPER_CAPITAL=10_000.0,
+            PERSIST_PAPER_CAPITAL=False,
+            DATABASE_PATH=str(tmp_path / "funding_arb_test.db"),
+        )
+        strategy = FundingRateArbStrategy(cfg, mock_api, mock_db)
+        pos_id = await strategy.open_position(
+            "BTC", PositionSide.SHORT, 0.001, 50_000.0
+        )
+        await strategy.close_position(pos_id, "rate_reverted", 51_000.0)
+
+        restarted = FundingRateArbStrategy(cfg, mock_api, mock_db)
+        assert restarted._paper_capital == 10_000.0
+        assert not (tmp_path / "funding_arb_test.db.paper_state.json").exists()
+
+    def test_memory_db_never_writes_state(self, mock_api, mock_db):
+        cfg = FundingArbConfig(
+            PAPER_TRADING=True,
+            DATABASE_PATH=":memory:",
+        )
+        strategy = FundingRateArbStrategy(cfg, mock_api, mock_db)
+        assert strategy._paper_state_path is None
+
+
+# ---------------------------------------------------------------------------
+# Scan cache tests (display loop must not re-scan the API)
+# ---------------------------------------------------------------------------
+
+
+class TestScanCache:
+    @pytest.mark.asyncio
+    async def test_last_opportunities_populated_after_scan(
+        self, config, mock_db, mock_api
+    ):
+        meta = {"universe": [{"name": "BTC"}, {"name": "ETH"}]}
+        ctxs = [
+            {"funding": "0.001", "markPx": "50000", "midPx": "50000"},
+            {"funding": "0.00001", "markPx": "3000", "midPx": "3000"},
+        ]
+
+        class ScriptedGateway:
+            async def get_meta_and_asset_ctxs(self):
+                return meta, ctxs
+
+            async def get_candles(self, coin, interval, start_ms, end_ms):
+                return []
+
+        strategy = FundingRateArbStrategy(
+            config, mock_api, mock_db, market_data=ScriptedGateway()
+        )
+        rates = await strategy.scan_funding_rates()
+        assert len(rates) == 2
+        cached = strategy.last_opportunities
+        assert cached == rates
+        # Mutating the returned copy must not affect the strategy's cache
+        cached.clear()
+        assert strategy.last_opportunities == rates

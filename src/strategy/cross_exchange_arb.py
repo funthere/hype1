@@ -58,8 +58,10 @@ class CrossExchangeArbConfig(BaseStrategyConfig):
     DATABASE_PATH: str = "cross_exchange_arb.db"
 
     # --- Strategy thresholds (per-hour) ---
-    ENTRY_THRESHOLD: float = 0.0001  # 0.01 %/hr
-    EXIT_THRESHOLD: float = 0.00003  # 0.003 %/hr
+    # Entry must clear the ~0.09% round-trip taker fees (HL 0.05% + Binance
+    # 0.04%, charged on open and close) before any edge survives.
+    ENTRY_THRESHOLD: float = 0.001  # 0.1 %/hr
+    EXIT_THRESHOLD: float = 0.0003  # 0.03 %/hr
 
     # --- Coins ---
     COINS: List[str] = field(default_factory=lambda: ["BTC", "ETH", "SOL"])
@@ -184,7 +186,7 @@ class CrossExchangeArbConfig(BaseStrategyConfig):
 
 @dataclass
 class ArbPosition:
-    """Tracks a matched pair (HL leg + dYdX leg)."""
+    """Tracks a matched pair (HL leg + Binance leg)."""
 
     id: str
     coin: str
@@ -197,15 +199,15 @@ class ArbPosition:
     hl_entry_price: float
     hl_funding_rate: float  # rate at entry (hourly)
 
-    # dYdX leg
-    dydx_side: str
-    dydx_quantity: float
-    dydx_notional: float
-    dydx_entry_price: float
-    dydx_funding_rate: float  # rate at entry (hourly)
+    # Binance leg
+    binance_side: str
+    binance_quantity: float
+    binance_notional: float
+    binance_entry_price: float
+    binance_funding_rate: float  # rate at entry (hourly)
 
     # Spread at entry
-    entry_spread: float  # HL_rate - dYdX_rate (per hour)
+    entry_spread: float  # HL_rate - Binance_rate (per hour)
 
     # Timing
     entry_time: float
@@ -218,7 +220,7 @@ class ArbPosition:
     close_reason: str = ""
     close_time: Optional[float] = None
     hl_close_price: Optional[float] = None
-    dydx_close_price: Optional[float] = None
+    binance_close_price: Optional[float] = None
     realized_pnl: float = 0.0
 
 
@@ -230,7 +232,7 @@ class ArbPosition:
 class CrossExchangeArbStrategy:
     """Cross-exchange funding-rate arbitrage engine.
 
-    Monitors funding rates on HyperLiquid and dYdX v4, opens
+    Monitors funding rates on HyperLiquid and Binance v4, opens
     delta-neutral pairs when the spread exceeds thresholds.
     """
 
@@ -346,9 +348,9 @@ class CrossExchangeArbStrategy:
         coin: str,
         arb_side: ArbSide,
         hl_rate: float,
-        dydx_rate: float,
+        binance_rate: float,
         hl_price: float,
-        dydx_price: float,
+        binance_price: float,
     ) -> Optional[str]:
         """Open a delta-neutral pair on both exchanges.
 
@@ -388,55 +390,58 @@ class CrossExchangeArbStrategy:
             # --- Position sizing ---
             notional = capital * self.config.POSITION_SIZE_PCT
             notional = min(notional, self.config.MAX_POSITION_SIZE_USD)
-            if notional <= 0 or hl_price <= 0 or dydx_price <= 0:
+            if notional <= 0 or hl_price <= 0 or binance_price <= 0:
                 return None
 
             hl_qty = round(notional / hl_price, 6)
-            dydx_qty = round(notional / dydx_price, 6)
-            if hl_qty <= 0 or dydx_qty <= 0:
+            binance_qty = round(notional / binance_price, 6)
+            if hl_qty <= 0 or binance_qty <= 0:
                 return None
 
             position_id = str(uuid.uuid4())[:8]
 
-            spread = hl_rate - dydx_rate
+            spread = hl_rate - binance_rate
 
             if arb_side == ArbSide.SHORT_HL_LONG_BINANCE:
                 hl_side = "SHORT"
-                dydx_side = "LONG"
+                binance_side = "LONG"
             else:
                 hl_side = "LONG"
-                dydx_side = "SHORT"
+                binance_side = "SHORT"
 
             if self.config.PAPER_TRADING:
                 # Paper: simulate fees
                 hl_fee = notional * self.config.HL_TAKER_FEE
-                dydx_fee = notional * self.config.BINANCE_TAKER_FEE
-                total_fees = abs(hl_fee) + abs(dydx_fee)
+                binance_fee = notional * self.config.BINANCE_TAKER_FEE
+                total_fees = abs(hl_fee) + abs(binance_fee)
                 self._paper_capital -= total_fees
 
                 logger.info(
-                    "[PAPER] OPEN %s %s | %s HL:%s dYdX:%s | "
-                    "hl_qty=%.6f dydx_qty=%.6f | hl_px=%.2f dydx_px=%.2f | "
+                    "[PAPER] OPEN %s %s | %s HL:%s Binance:%s | "
+                    "hl_qty=%.6f binance_qty=%.6f | hl_px=%.2f binance_px=%.2f | "
                     "spread=%.6f fees=%.4f",
                     position_id,
                     coin,
                     arb_side.value,
                     hl_side,
-                    dydx_side,
+                    binance_side,
                     hl_qty,
-                    dydx_qty,
+                    binance_qty,
                     hl_price,
-                    dydx_price,
+                    binance_price,
                     spread,
                     total_fees,
                 )
             else:
-                # Live: place HL order via HyperliquidAPI
-                # (dYdX order placement requires Cosmos SDK signing – not implemented)
-                logger.warning(
-                    "LIVE mode: only HL leg will be placed; dYdX leg is paper-tracked"
+                # Fail closed: a one-legged "delta-neutral" pair carries full
+                # directional risk on the missing venue. Both legs must be
+                # executable before any live entry.
+                logger.error(
+                    "LIVE entry refused for %s: second-leg (Binance) order "
+                    "execution is not implemented; refusing one-legged pair",
+                    coin,
                 )
-                # We would call self.hl_api.place_order(...) here
+                return None
 
             pos = ArbPosition(
                 id=position_id,
@@ -447,11 +452,11 @@ class CrossExchangeArbStrategy:
                 hl_notional=notional,
                 hl_entry_price=hl_price,
                 hl_funding_rate=hl_rate,
-                dydx_side=dydx_side,
-                dydx_quantity=dydx_qty,
-                dydx_notional=notional,
-                dydx_entry_price=dydx_price,
-                dydx_funding_rate=dydx_rate,
+                binance_side=binance_side,
+                binance_quantity=binance_qty,
+                binance_notional=notional,
+                binance_entry_price=binance_price,
+                binance_funding_rate=binance_rate,
                 entry_spread=spread,
                 entry_time=time.time(),
                 last_funding_time=time.time(),
@@ -468,7 +473,7 @@ class CrossExchangeArbStrategy:
                     event_type="cross_arb_open",
                     message=(
                         f"Opened {arb_side.value} {coin} | "
-                        f"HL {hl_side} dYdX {dydx_side} | "
+                        f"HL {hl_side} Binance {binance_side} | "
                         f"spread={spread:.6f}"
                     ),
                     event_data={
@@ -476,15 +481,15 @@ class CrossExchangeArbStrategy:
                         "coin": coin,
                         "arb_side": arb_side.value,
                         "hl_side": hl_side,
-                        "dydx_side": dydx_side,
+                        "binance_side": binance_side,
                         "hl_quantity": hl_qty,
-                        "dydx_quantity": dydx_qty,
+                        "binance_quantity": binance_qty,
                         "hl_entry_price": hl_price,
-                        "dydx_entry_price": dydx_price,
+                        "binance_entry_price": binance_price,
                         "hl_notional": notional,
-                        "dydx_notional": notional,
+                        "binance_notional": notional,
                         "hl_rate": hl_rate,
-                        "dydx_rate": dydx_rate,
+                        "binance_rate": binance_rate,
                         "spread": spread,
                     },
                 )
@@ -500,7 +505,7 @@ class CrossExchangeArbStrategy:
         position_id: str,
         reason: str,
         hl_price: Optional[float] = None,
-        dydx_price: Optional[float] = None,
+        binance_price: Optional[float] = None,
     ) -> bool:
         """Close a cross-exchange arb pair."""
         try:
@@ -510,9 +515,9 @@ class CrossExchangeArbStrategy:
 
             if hl_price is None:
                 hl_price = self._hl_price_cache.get(pos.coin, pos.hl_entry_price)
-            if dydx_price is None:
-                # Use HL price as proxy for dYdX (they track closely for majors)
-                dydx_price = hl_price
+            if binance_price is None:
+                # Use HL price as proxy for Binance (they track closely for majors)
+                binance_price = hl_price
 
             # --- Calculate PnL for each leg ---
             if pos.hl_side == "SHORT":
@@ -520,29 +525,35 @@ class CrossExchangeArbStrategy:
             else:
                 hl_pnl = (hl_price - pos.hl_entry_price) * pos.hl_quantity
 
-            if pos.dydx_side == "SHORT":
-                dydx_pnl = (pos.dydx_entry_price - dydx_price) * pos.dydx_quantity
+            if pos.binance_side == "SHORT":
+                binance_pnl = (
+                    pos.binance_entry_price - binance_price
+                ) * pos.binance_quantity
             else:
-                dydx_pnl = (dydx_price - pos.dydx_entry_price) * pos.dydx_quantity
+                binance_pnl = (
+                    binance_price - pos.binance_entry_price
+                ) * pos.binance_quantity
 
             # Close fees
             close_fees = abs(pos.hl_notional * self.config.HL_TAKER_FEE) + abs(
-                pos.dydx_notional * self.config.BINANCE_TAKER_FEE
+                pos.binance_notional * self.config.BINANCE_TAKER_FEE
             )
 
-            # Net PnL = HL leg + dYdX leg + funding collected - close fees
-            realized_pnl = hl_pnl + dydx_pnl + pos.total_funding_collected - close_fees
+            # Net PnL = HL leg + Binance leg + funding collected - close fees
+            realized_pnl = (
+                hl_pnl + binance_pnl + pos.total_funding_collected - close_fees
+            )
 
             if self.config.PAPER_TRADING:
-                self._paper_capital += hl_pnl + dydx_pnl - close_fees
+                self._paper_capital += hl_pnl + binance_pnl - close_fees
                 logger.info(
                     "[PAPER] CLOSE %s %s | reason=%s | "
-                    "hl_pnl=%.4f dydx_pnl=%.4f funding=%.4f fees=%.4f net=%.4f",
+                    "hl_pnl=%.4f binance_pnl=%.4f funding=%.4f fees=%.4f net=%.4f",
                     position_id,
                     pos.coin,
                     reason,
                     hl_pnl,
-                    dydx_pnl,
+                    binance_pnl,
                     pos.total_funding_collected,
                     close_fees + pos.fees_paid,
                     realized_pnl,
@@ -552,7 +563,7 @@ class CrossExchangeArbStrategy:
             pos.close_reason = reason
             pos.close_time = time.time()
             pos.hl_close_price = hl_price
-            pos.dydx_close_price = dydx_price
+            pos.binance_close_price = binance_price
             pos.realized_pnl = realized_pnl
 
             if self.db:
@@ -567,9 +578,9 @@ class CrossExchangeArbStrategy:
                         "position_id": position_id,
                         "coin": pos.coin,
                         "hl_close_price": hl_price,
-                        "dydx_close_price": dydx_price,
+                        "binance_close_price": binance_price,
                         "hl_pnl": hl_pnl,
-                        "dydx_pnl": dydx_pnl,
+                        "binance_pnl": binance_pnl,
                         "funding_collected": pos.total_funding_collected,
                         "close_fees": close_fees,
                         "realized_pnl": realized_pnl,
@@ -598,62 +609,62 @@ class CrossExchangeArbStrategy:
 
         # 2. Fetch rates from both exchanges
         hl_rates = await self.fetch_hl_funding_rates()
-        dydx_rates = await self.fetch_binance_funding_rates()
+        binance_rates = await self.fetch_binance_funding_rates()
 
-        if not hl_rates or not dydx_rates:
+        if not hl_rates or not binance_rates:
             logger.warning(
-                "Missing rates – HL: %d coins, dYdX: %d coins",
+                "Missing rates – HL: %d coins, Binance: %d coins",
                 len(hl_rates),
-                len(dydx_rates),
+                len(binance_rates),
             )
             return
 
         # 3. Log current rate comparison
         for coin in self.config.COINS:
             hl = hl_rates.get(coin)
-            dydx = dydx_rates.get(coin)
-            if hl and dydx:
-                spread = hl["rate_hourly"] - dydx["rate_hourly"]
+            binance = binance_rates.get(coin)
+            if hl and binance:
+                spread = hl["rate_hourly"] - binance["rate_hourly"]
                 logger.info(
-                    "  %s  HL=%.6f%%/hr  dYdX=%.6f%%/hr  spread=%.6f%%/hr  "
-                    "hl_px=%.2f  dydx_px=%.2f",
+                    "  %s  HL=%.6f%%/hr  Binance=%.6f%%/hr  spread=%.6f%%/hr  "
+                    "hl_px=%.2f  binance_px=%.2f",
                     coin,
                     hl["rate_hourly"] * 100,
-                    dydx["rate_hourly"] * 100,
+                    binance["rate_hourly"] * 100,
                     spread * 100,
                     hl["mark_px"],
-                    dydx["mark_px"],
+                    binance["mark_px"],
                 )
 
         # 4. Check for entry signals
         for coin in self.config.COINS:
             hl = hl_rates.get(coin)
-            dydx = dydx_rates.get(coin)
-            if not hl or not dydx:
+            binance = binance_rates.get(coin)
+            if not hl or not binance:
                 continue
 
-            spread = hl["rate_hourly"] - dydx["rate_hourly"]
+            spread = hl["rate_hourly"] - binance["rate_hourly"]
 
             if abs(spread) >= self.config.ENTRY_THRESHOLD - 1e-9:
                 if spread > 0:
-                    # HL rate > dYdX → SHORT HL, LONG dYdX
+                    # HL rate > Binance → SHORT HL, LONG Binance
                     await self.open_position(
                         coin,
                         ArbSide.SHORT_HL_LONG_BINANCE,
                         hl["rate_hourly"],
-                        dydx["rate_hourly"],
+                        binance["rate_hourly"],
                         hl["mark_px"],
-                        dydx["mark_px"],
+                        binance["mark_px"],
                     )
                 else:
-                    # dYdX rate > HL → LONG HL, SHORT dYdX
+                    # Binance rate > HL → LONG HL, SHORT Binance
                     await self.open_position(
                         coin,
                         ArbSide.LONG_HL_SHORT_BINANCE,
                         hl["rate_hourly"],
-                        dydx["rate_hourly"],
+                        binance["rate_hourly"],
                         hl["mark_px"],
-                        dydx["mark_px"],
+                        binance["mark_px"],
                     )
 
     async def _check_existing_positions(self) -> None:
@@ -665,24 +676,24 @@ class CrossExchangeArbStrategy:
             return
 
         hl_rates = await self.fetch_hl_funding_rates()
-        dydx_rates = await self.fetch_binance_funding_rates()
+        binance_rates = await self.fetch_binance_funding_rates()
 
         now = time.time()
 
         for pos in open_positions:
             hl = hl_rates.get(pos.coin, {})
-            dydx = dydx_rates.get(pos.coin, {})
+            binance = binance_rates.get(pos.coin, {})
 
             hl_rate = hl.get("rate_hourly", 0.0)
-            dydx_rate = dydx.get("rate_hourly", 0.0)
+            binance_rate = binance.get("rate_hourly", 0.0)
             hl_price = hl.get("mark_px", pos.hl_entry_price)
-            dydx_price = dydx.get("mark_px", pos.dydx_entry_price)
+            binance_price = binance.get("mark_px", pos.binance_entry_price)
 
             hold_hours = (now - pos.entry_time) / 3600
-            current_spread = hl_rate - dydx_rate
+            current_spread = hl_rate - binance_rate
 
             # --- Accumulate funding ---
-            await self._accumulate_funding(pos, hl_rate, dydx_rate, now)
+            await self._accumulate_funding(pos, hl_rate, binance_rate, now)
 
             # --- Exit checks ---
             should_close = False
@@ -719,39 +730,39 @@ class CrossExchangeArbStrategy:
 
             if should_close:
                 logger.info("Closing %s %s: %s", pos.id, pos.coin, reason)
-                await self.close_position(pos.id, reason, hl_price, dydx_price)
+                await self.close_position(pos.id, reason, hl_price, binance_price)
 
     async def _accumulate_funding(
         self,
         pos: ArbPosition,
         hl_rate: float,
-        dydx_rate: float,
+        binance_rate: float,
         now: float,
     ) -> None:
         """Estimate pro-rata funding accumulated since last check.
 
-        SHORT on HL with positive rate → we receive funding from HL.
-        LONG on dYdX with positive rate → we pay funding on dYdX.
-        Net = HL received - dYdX paid.
+        Each leg's funding is signed from the strategy's perspective
+        (SHORT receives positive funding, LONG pays it), so the net is
+        the sum of both legs.
         """
         elapsed_hours = (now - pos.last_funding_time) / 3600.0
         if elapsed_hours < 0.01:
             return
 
-        # HL leg funding
+        # HL leg funding (signed: what we receive)
         if pos.hl_side == "SHORT":
             hl_funding = pos.hl_notional * hl_rate * elapsed_hours
         else:
             hl_funding = pos.hl_notional * (-hl_rate) * elapsed_hours
 
-        # dYdX leg funding
-        if pos.dydx_side == "SHORT":
-            dydx_funding = pos.dydx_notional * dydx_rate * elapsed_hours
+        # Binance leg funding (signed: what we receive; LONG pays)
+        if pos.binance_side == "SHORT":
+            binance_funding = pos.binance_notional * binance_rate * elapsed_hours
         else:
-            dydx_funding = pos.dydx_notional * (-dydx_rate) * elapsed_hours
+            binance_funding = pos.binance_notional * (-binance_rate) * elapsed_hours
 
         # Net: what we receive (positive = good for us)
-        net_funding = hl_funding - dydx_funding
+        net_funding = hl_funding + binance_funding
         pos.total_funding_collected += net_funding
         pos.last_funding_time = now
 
@@ -820,11 +831,11 @@ class CrossExchangeArbStrategy:
                         "coin": p.coin,
                         "arb_side": p.arb_side.value,
                         "hl_side": p.hl_side,
-                        "dydx_side": p.dydx_side,
+                        "binance_side": p.binance_side,
                         "hl_quantity": p.hl_quantity,
-                        "dydx_quantity": p.dydx_quantity,
+                        "binance_quantity": p.binance_quantity,
                         "hl_entry_price": p.hl_entry_price,
-                        "dydx_entry_price": p.dydx_entry_price,
+                        "binance_entry_price": p.binance_entry_price,
                         "entry_spread": p.entry_spread,
                         "funding_collected": round(p.total_funding_collected, 6),
                         "hold_hours": round((time.time() - p.entry_time) / 3600, 1),

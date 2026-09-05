@@ -26,8 +26,8 @@ def config() -> CrossExchangeArbConfig:
         PAPER_TRADING=True,
         PAPER_CAPITAL=10000.0,
         COINS=["BTC", "ETH", "SOL"],
-        ENTRY_THRESHOLD=0.0001,
-        EXIT_THRESHOLD=0.00003,
+        ENTRY_THRESHOLD=0.001,
+        EXIT_THRESHOLD=0.0003,
         POSITION_SIZE_PCT=0.10,
         MAX_POSITION_SIZE_USD=5000.0,
         LEVERAGE=3,
@@ -105,7 +105,9 @@ class TestConfig:
         assert config.PAPER_TRADING is True
         assert config.PAPER_CAPITAL == 10000.0
         assert config.COINS == ["BTC", "ETH", "SOL"]
-        assert config.ENTRY_THRESHOLD == 0.0001
+        # Entry threshold must clear the ~0.09% round-trip taker fees
+        assert config.ENTRY_THRESHOLD == 0.001
+        assert config.EXIT_THRESHOLD == 0.0003
         assert config.LEVERAGE == 3
 
     def test_validate_ok(self, config):
@@ -146,7 +148,7 @@ class TestFetching:
         assert rates["BTC"]["mark_px"] == 68000.0
 
     @pytest.mark.asyncio
-    async def test_fetch_dydx_rates(self, strategy, mock_binance_client):
+    async def test_fetch_binance_rates(self, strategy, mock_binance_client):
         strategy.set_binance_client(mock_binance_client)
         rates = await strategy.fetch_binance_funding_rates()
         assert "BTC" in rates
@@ -171,9 +173,9 @@ class TestOpening:
             coin="BTC",
             arb_side=ArbSide.SHORT_HL_LONG_BINANCE,
             hl_rate=0.00015,
-            dydx_rate=0.00005,
+            binance_rate=0.00005,
             hl_price=68000.0,
-            dydx_price=67990.0,
+            binance_price=67990.0,
         )
         assert pos_id is not None
         assert pos_id in strategy._positions
@@ -181,7 +183,7 @@ class TestOpening:
         assert pos.coin == "BTC"
         assert pos.arb_side == ArbSide.SHORT_HL_LONG_BINANCE
         assert pos.hl_side == "SHORT"
-        assert pos.dydx_side == "LONG"
+        assert pos.binance_side == "LONG"
         assert pos.status == PairStatus.OPEN
         assert abs(pos.entry_spread - 0.0001) < 1e-10  # 0.00015 - 0.00005
 
@@ -192,14 +194,14 @@ class TestOpening:
             coin="ETH",
             arb_side=ArbSide.LONG_HL_SHORT_BINANCE,
             hl_rate=0.0001,
-            dydx_rate=0.00015,
+            binance_rate=0.00015,
             hl_price=3500.0,
-            dydx_price=3498.0,
+            binance_price=3498.0,
         )
         assert pos_id is not None
         pos = strategy._positions[pos_id]
         assert pos.hl_side == "LONG"
-        assert pos.dydx_side == "SHORT"
+        assert pos.binance_side == "SHORT"
 
     @pytest.mark.asyncio
     async def test_no_duplicate_position(self, strategy, mock_binance_client):
@@ -287,7 +289,7 @@ class TestClosing:
             pos_id,
             reason="spread_narrowed",
             hl_price=68050.0,
-            dydx_price=68040.0,
+            binance_price=68040.0,
         )
         assert result is True
         pos = strategy._positions[pos_id]
@@ -325,6 +327,9 @@ class TestRunCycle:
     async def test_run_cycle_opens_and_closes(self, strategy, mock_binance_client):
         """Simulate a full cycle where spread triggers entry."""
         strategy.set_binance_client(mock_binance_client)
+        # Mocked BTC spread is 0.0001/hr; lower the threshold so it clears it
+        strategy.config.ENTRY_THRESHOLD = 0.00005
+        strategy.config.EXIT_THRESHOLD = 0.00001
 
         await strategy.run_cycle()
         # BTC spread = 0.00015 - 0.00005 = 0.0001 >= ENTRY_THRESHOLD → should open
@@ -377,7 +382,7 @@ class TestFundingAccumulation:
     async def test_funding_accumulated_for_short_hl(
         self, strategy, mock_binance_client
     ):
-        """SHORT on HL with positive rate should accumulate funding."""
+        """SHORT HL / LONG Binance: net funding = spread * notional * hours."""
         strategy.set_binance_client(mock_binance_client)
         pos_id = await strategy.open_position(
             "BTC",
@@ -394,10 +399,96 @@ class TestFundingAccumulation:
         await strategy._accumulate_funding(
             pos,
             hl_rate=0.00015,
-            dydx_rate=0.00005,
+            binance_rate=0.00005,
             now=time.time(),
         )
-        # HL: SHORT receives funding = notional * rate * hours = 1000 * 0.00015 * 1 = 0.15
-        # dYdX: LONG pays funding = notional * rate * hours = 1000 * 0.00005 * 1 = 0.05
-        # Net = 0.15 - 0.05 = 0.10
-        assert pos.total_funding_collected > 0
+        # HL: SHORT receives 1000 * 0.00015 * 1 = 0.15
+        # Binance: LONG pays 1000 * 0.00005 * 1 = 0.05
+        # Net = 0.15 - 0.05 = 0.10 (the signed LONG leg must subtract, not add)
+        assert abs(pos.total_funding_collected - 0.10) < 1e-9
+
+    @pytest.mark.asyncio
+    async def test_funding_net_equals_spread_times_notional(
+        self, strategy, mock_binance_client
+    ):
+        """Regression: the LONG leg previously flipped sign and overstated
+        collected funding (net became hl + binance instead of hl - binance)."""
+        strategy.set_binance_client(mock_binance_client)
+        pos_id = await strategy.open_position(
+            "BTC",
+            ArbSide.SHORT_HL_LONG_BINANCE,
+            0.00015,
+            0.00005,
+            68000.0,
+            67990.0,
+        )
+        pos = strategy._positions[pos_id]
+        pos.last_funding_time = time.time() - 7200
+
+        await strategy._accumulate_funding(
+            pos, hl_rate=0.00010, binance_rate=0.00008, now=time.time()
+        )
+        # notional 1000, 2 hours: receive 0.2 on HL, pay 0.16 on Binance → 0.04
+        assert abs(pos.total_funding_collected - 0.04) < 1e-9
+
+    @pytest.mark.asyncio
+    async def test_funding_negative_when_spread_reverses(
+        self, strategy, mock_binance_client
+    ):
+        """A reversed spread must book negative funding, never a gain."""
+        strategy.set_binance_client(mock_binance_client)
+        pos_id = await strategy.open_position(
+            "BTC",
+            ArbSide.SHORT_HL_LONG_BINANCE,
+            0.00015,
+            0.00005,
+            68000.0,
+            67990.0,
+        )
+        pos = strategy._positions[pos_id]
+        pos.last_funding_time = time.time() - 3600
+
+        await strategy._accumulate_funding(
+            pos, hl_rate=0.00002, binance_rate=0.00008, now=time.time()
+        )
+        # receive 0.02 on HL, pay 0.08 on Binance → net -0.06
+        assert abs(pos.total_funding_collected - (-0.06)) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Live-mode guard tests
+# ---------------------------------------------------------------------------
+
+
+class TestLiveModeGuard:
+    @pytest.mark.asyncio
+    async def test_live_entry_refused_without_second_leg(
+        self, config, mock_market_data, mock_db
+    ):
+        """One-legged live pairs carry full directional risk and must be refused."""
+        strategy = CrossExchangeArbStrategy(config, mock_market_data, mock_db)
+        strategy.config.PAPER_TRADING = False
+
+        pos_id = await strategy.open_position(
+            "BTC",
+            ArbSide.SHORT_HL_LONG_BINANCE,
+            0.00015,
+            0.00005,
+            68000.0,
+            67990.0,
+        )
+        assert pos_id is None
+        assert strategy._positions == {}
+
+    @pytest.mark.asyncio
+    async def test_paper_entry_still_allowed(self, strategy, mock_binance_client):
+        strategy.set_binance_client(mock_binance_client)
+        pos_id = await strategy.open_position(
+            "BTC",
+            ArbSide.SHORT_HL_LONG_BINANCE,
+            0.00015,
+            0.00005,
+            68000.0,
+            67990.0,
+        )
+        assert pos_id is not None

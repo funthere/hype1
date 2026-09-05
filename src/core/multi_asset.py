@@ -87,25 +87,41 @@ class CorrelationFilter:
             self.price_history[asset] = self.price_history[asset][-self.window * 2 :]
 
     def get_correlation(self, asset1: str, asset2: str) -> Optional[float]:
-        """Calculate correlation between two assets"""
+        """Calculate return correlation between two assets.
+
+        Correlation is computed on period-over-period returns, not price
+        levels: level correlation is dominated by shared trends and reads
+        ~1.0 for any two appreciating assets, which would block every
+        combination regardless of genuine co-movement.
+        """
         if asset1 not in self.price_history or asset2 not in self.price_history:
             return None
 
         prices1 = self.price_history[asset1]
         prices2 = self.price_history[asset2]
 
-        # Need minimum data points
+        # Need minimum data points (plus one to form returns)
         min_len = min(len(prices1), len(prices2))
-        if min_len < self.window:
+        if min_len < self.window + 1:
             return None
 
-        # Use recent window
-        prices1_recent = prices1[-min_len:]
-        prices2_recent = prices2[-min_len:]
+        # Align on the most recent window and convert levels to returns
+        prices1_recent = np.asarray(prices1[-min_len:], dtype=float)
+        prices2_recent = np.asarray(prices2[-min_len:], dtype=float)
+        if np.any(prices1_recent[:-1] <= 0) or np.any(prices2_recent[:-1] <= 0):
+            return None
+
+        returns1 = np.diff(prices1_recent) / prices1_recent[:-1]
+        returns2 = np.diff(prices2_recent) / prices2_recent[:-1]
+
+        # Zero return variance (e.g. a perfectly steady series) carries no
+        # co-movement information; corrcoef would return NaN or float noise.
+        if np.std(returns1) < 1e-10 or np.std(returns2) < 1e-10:
+            return 0.0
 
         # Calculate correlation
         try:
-            corr = np.corrcoef(prices1_recent, prices2_recent)[0, 1]
+            corr = np.corrcoef(returns1, returns2)[0, 1]
             return corr if not np.isnan(corr) else 0.0
         except Exception:
             return 0.0
@@ -163,6 +179,7 @@ class MultiAssetStrategy:
         assets: List[AssetConfig],
         allocation_method: AssetAllocationMethod = AssetAllocationMethod.EQUAL_WEIGHT,
         max_correlation: float = 0.7,
+        volatility_target: float = 0.02,
     ):
         """
         Initialize multi-asset strategy
@@ -172,10 +189,13 @@ class MultiAssetStrategy:
             assets: List of asset configurations
             allocation_method: How to allocate capital across assets
             max_correlation: Max correlation filter threshold
+            volatility_target: Per-asset daily return-vol target used by
+                ``VOLATILITY_TARGET`` allocation (e.g. 0.02 = 2%)
         """
         self.base_config = base_config
         self.assets = {a.symbol: a for a in assets if a.enabled}
         self.allocation_method = allocation_method
+        self.volatility_target = volatility_target
         self.correlation_filter = CorrelationFilter(max_correlation=max_correlation)
 
         # State
@@ -188,7 +208,14 @@ class MultiAssetStrategy:
         self.allocations = self._calculate_allocations()
 
     def _calculate_allocations(self) -> Dict[str, float]:
-        """Calculate capital allocation for each asset"""
+        """Calculate capital allocation for each asset.
+
+        EQUAL_WEIGHT and SIGNAL_STRENGTH are static and resolved at
+        construction. RISK_PARITY and VOLATILITY_TARGET need realized
+        volatility, which is unavailable before price data arrives; they
+        start from equal weights and are refined by
+        :meth:`recalculate_allocations` as history accumulates.
+        """
         allocations = {}
 
         if self.allocation_method == AssetAllocationMethod.EQUAL_WEIGHT:
@@ -205,24 +232,79 @@ class MultiAssetStrategy:
                 )
 
         elif self.allocation_method == AssetAllocationMethod.RISK_PARITY:
-            # Equal risk contribution (requires volatility data)
-            # For now, use equal weights
-            weight = 1.0 / len(self.assets)
+            # Equal risk contribution: inverse-volatility weights once
+            # realized volatility is observable (starts equal-weighted)
             for asset in self.assets:
-                allocations[asset] = weight
+                allocations[asset] = 1.0 / len(self.assets)
 
         else:  # VOLATILITY_TARGET
-            # Inverse volatility weighting
-            # For now, use equal weights
-            weight = 1.0 / len(self.assets)
+            # Inverse-volatility weighting scaled to the target: assets with
+            # higher realized volatility get smaller weights (starts
+            # equal-weighted until history arrives)
             for asset in self.assets:
-                allocations[asset] = weight
+                allocations[asset] = 1.0 / len(self.assets)
 
         return allocations
+
+    def _realized_volatilities(self) -> Dict[str, Optional[float]]:
+        """Return per-asset standard deviation of returns from price history."""
+        vols: Dict[str, Optional[float]] = {}
+        for asset in self.assets:
+            prices = self.correlation_filter.price_history.get(asset, [])
+            if len(prices) < self.correlation_filter.window + 1:
+                vols[asset] = None
+                continue
+            arr = np.asarray(prices[-(self.correlation_filter.window + 1) :], float)
+            if np.any(arr[:-1] <= 0):
+                vols[asset] = None
+                continue
+            returns = np.diff(arr) / arr[:-1]
+            std = float(np.std(returns, ddof=1)) if len(returns) > 1 else None
+            vols[asset] = std if std and std > 0 else None
+        return vols
+
+    def recalculate_allocations(self) -> Dict[str, float]:
+        """Recompute volatility-based allocations from accumulated prices.
+
+        RISK_PARITY weights are inversely proportional to each asset's
+        realized return volatility. VOLATILITY_TARGET additionally caps
+        each asset's contribution at ``volatility_target`` before
+        normalizing. Both fall back to the current allocations per asset
+        while volatility is still unknown.
+        """
+        if self.allocation_method not in (
+            AssetAllocationMethod.RISK_PARITY,
+            AssetAllocationMethod.VOLATILITY_TARGET,
+        ):
+            return self.allocations
+
+        vols = self._realized_volatilities()
+        raw: Dict[str, float] = {}
+        for asset in self.assets:
+            vol = vols.get(asset)
+            if vol is None:
+                # Not enough history: keep the previous weight for this asset
+                raw[asset] = self.allocations.get(asset, 1.0 / len(self.assets))
+                continue
+            if self.allocation_method == AssetAllocationMethod.RISK_PARITY:
+                raw[asset] = 1.0 / vol
+            else:  # VOLATILITY_TARGET
+                target = self.volatility_target
+                contribution = min(1.0, target / vol) if target > 0 else 1.0
+                raw[asset] = contribution
+
+        total = sum(raw.values())
+        if total <= 0:
+            return self.allocations
+
+        self.allocations = {asset: w / total for asset, w in raw.items()}
+        return self.allocations
 
     def update_asset_price(self, asset: str, price: float) -> None:
         """Update price for correlation calculation"""
         self.correlation_filter.update_price(asset, price)
+        # Volatility-based allocations refine as history accumulates
+        self.recalculate_allocations()
 
     def can_trade_asset(
         self, asset: str, signal: MultiAssetSignal, all_positions: List[Position]
