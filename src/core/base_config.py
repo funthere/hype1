@@ -5,7 +5,7 @@ Provides common fields and validation logic shared across strategy configs:
   - BotConfig (main bot)
   - FundingArbConfig (funding rate arbitrage)
   - TrendFollowingConfig (trend following)
-  - SurvivalBotConfig (survival-focused)
+  - CrossExchangeArbConfig (cross-exchange arbitrage)
 """
 
 import logging

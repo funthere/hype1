@@ -42,7 +42,7 @@ This is a HYPE/USDC trading bot for Hyperliquid DEX using a modular architecture
 - Separated concerns across modules:
   - `src/core/config.py` - Configuration and data models (`BotConfig`, `Side`, `Position`, `Trade`)
   - `src/core/strategy.py` - Strategy logic and risk management
-  - `src/core/survival.py` - Conservative risk profiles for production
+  - `src/core/survival_risk.py` - Survival risk manager (position heat, tiered risk)
   - `src/core/multi_asset.py` - Multi-asset trading with correlation filtering
   - `src/exchange/connector.py` - Hyperliquid API wrapper using SDK
   - `src/exchange/market_data.py` - WebSocket market data feed

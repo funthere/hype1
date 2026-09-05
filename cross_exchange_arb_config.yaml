@@ -12,7 +12,7 @@ paper_capital: 10000.0
 
 # --- Coins to trade ---
 # Majors only: thin orderbooks on small caps make price impact exceed the
-# funding edge (see EVALUATION.md).
+# funding edge (see docs/EVALUATION.md).
 coins:
   - BTC
   - ETH

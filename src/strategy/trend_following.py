@@ -14,9 +14,9 @@ Strategy:
   - Risk managed with ATR-based stops and position sizing
 
 Entries are pullback-to-trend, not fresh crossovers: an EMA crossover is a
-lagging signal that fires after the move has started (see EVALUATION.md);
-entering on the retracement towards the fast EMA buys weakness in an
-established trend instead of chasing strength at the cross.
+lagging signal that fires after the move has started (see
+docs/EVALUATION.md); entering on the retracement towards the fast EMA buys
+weakness in an established trend instead of chasing strength at the cross.
 """
 
 import asyncio
