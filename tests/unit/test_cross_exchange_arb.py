@@ -39,11 +39,11 @@ def config() -> CrossExchangeArbConfig:
 
 
 @pytest.fixture
-def mock_hl_info():
-    """Mock HyperLiquid Info SDK object."""
-    info = MagicMock()
-    info.meta_and_asset_ctxs = MagicMock(
-        return_value=(
+def mock_market_data():
+    """Mock MarketDataGateway returning a scripted HL universe."""
+
+    async def get_meta_and_asset_ctxs():
+        return (
             {
                 "universe": [
                     {"name": "BTC"},
@@ -59,8 +59,10 @@ def mock_hl_info():
                 {"funding": "0.0000", "markPx": "0.10"},  # DOGE: 0
             ],
         )
-    )
-    return info
+
+    gateway = MagicMock()
+    gateway.get_meta_and_asset_ctxs = AsyncMock(side_effect=get_meta_and_asset_ctxs)
+    return gateway
 
 
 @pytest.fixture
@@ -88,8 +90,8 @@ def mock_db():
 
 
 @pytest.fixture
-def strategy(config, mock_hl_info, mock_db):
-    strat = CrossExchangeArbStrategy(config, mock_hl_info, mock_db)
+def strategy(config, mock_market_data, mock_db):
+    strat = CrossExchangeArbStrategy(config, mock_market_data, mock_db)
     return strat
 
 

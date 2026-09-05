@@ -20,9 +20,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
-from hyperliquid.info import Info
-
 from ..core.base_config import BaseStrategyConfig
+from ..execution import MarketDataGateway
 
 logger = logging.getLogger(__name__)
 
@@ -185,10 +184,17 @@ class FundingRateArbStrategy:
         config: FundingArbConfig,
         api: Any,  # HyperliquidAPI (or paper shim) – duck-typed
         db: Any,  # DatabaseManager – duck-typed
+        market_data: Optional[MarketDataGateway] = None,
     ) -> None:
         self.config = config
         self.api = api
         self.db = db
+        # Market data arrives through the gateway port. The Hyperliquid
+        # connector implements both contracts, so ``api`` is a valid default;
+        # tests inject a scripted gateway here.
+        self._market_data: MarketDataGateway = (
+            market_data if market_data is not None else api
+        )
 
         # Internal state
         self._positions: Dict[str, FundingPosition] = {}
@@ -198,9 +204,6 @@ class FundingRateArbStrategy:
 
         # For paper mode capital tracking
         self._paper_capital: float = config.PAPER_CAPITAL
-
-        # Cache for SDK Info object (used for meta_and_asset_ctxs)
-        self._info: Optional[Info] = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -214,24 +217,8 @@ class FundingRateArbStrategy:
               coin, funding_rate, mark_px, mid_px, open_interest
         """
         try:
-            info = self._get_info()
-            # Retry with exponential backoff on 429 rate limits
-            raw: Optional[tuple] = None
-            for attempt in range(3):
-                try:
-                    raw = await asyncio.to_thread(info.meta_and_asset_ctxs)
-                    break
-                except Exception as api_exc:
-                    if "429" in str(api_exc) and attempt < 2:
-                        wait = 30 * (2**attempt)  # 30s, 60s
-                        logger.warning(
-                            "HL API 429 — retrying in %ds (attempt %d/3)",
-                            wait,
-                            attempt + 1,
-                        )
-                        await asyncio.sleep(wait)
-                    else:
-                        raise
+            # The gateway applies retry-with-backoff for transient API errors
+            raw = await self._market_data.get_meta_and_asset_ctxs()
 
             if not raw or len(raw) < 2:
                 logger.warning("meta_and_asset_ctxs returned unexpected format")
@@ -723,12 +710,6 @@ class FundingRateArbStrategy:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-
-    def _get_info(self) -> Info:
-        """Return a reusable SDK ``Info`` object."""
-        if self._info is None:
-            self._info = Info(self.config.API_URL, skip_ws=True)
-        return self._info
 
     async def _get_available_capital(self) -> float:
         """Return capital available for new positions."""

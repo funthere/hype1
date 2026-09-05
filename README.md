@@ -85,6 +85,10 @@ The lifecycle boundary distinguishes order submission from execution: a live
 exit becomes a terminal trade only after a matching fill and a successful flat
 exchange-position snapshot agree.
 
+Strategies depend only on the typed `TradingGateway` and `MarketDataGateway`
+protocols in `src/execution/`; the Hyperliquid SDK is imported exclusively
+inside `src/exchange/` adapters (enforced by lint rule `TID251`).
+
 ## Testing
 
 ```bash

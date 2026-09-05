@@ -106,7 +106,7 @@ The bot loads `.env` automatically via `load_dotenv()` at module import.
 
 ## Important Implementation Details
 
-1. **SDK Integration**: The `HyperliquidAPI` class wraps `hyperliquid-python-sdk` (`Info` for market data, `Exchange` for trading). Don't use raw HTTP requests.
+1. **SDK Integration**: The `HyperliquidAPI` class wraps `hyperliquid-python-sdk` (`Info` for market data, `Exchange` for trading). Don't use raw HTTP requests. The SDK may only be imported inside `src/exchange/` (ruff `TID251` bans it elsewhere). Strategies consume the `TradingGateway` and `MarketDataGateway` protocols from `src/execution/` — the connector implements both; tests inject scripted gateways.
 
 2. **Paper Trading**: When `PAPER_TRADING=True`, orders are simulated locally. The `_place_paper_order()` method creates position objects without calling the exchange.
 

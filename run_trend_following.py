@@ -245,7 +245,7 @@ async def main() -> None:
     api = HyperliquidAPI(bot_config)
     db = DatabaseManager(config.DATABASE_PATH)
 
-    strategy = TrendFollowingStrategy(config, api, db)
+    strategy = TrendFollowingStrategy(config, api, db, market_data=api)
 
     # Graceful shutdown
     shutdown_event = asyncio.Event()

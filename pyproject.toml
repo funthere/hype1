@@ -19,7 +19,15 @@ line-ending = "lf"
 [tool.ruff.lint]
 # Enforce syntax, undefined-name, and import correctness while legacy style
 # cleanup is completed incrementally in focused modules.
-select = ["E4", "E7", "E9", "F"]
+# TID251 bans Hyperliquid SDK imports outside src/exchange adapters.
+select = ["E4", "E7", "E9", "F", "TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"hyperliquid".msg = "Import the Hyperliquid SDK only inside src/exchange adapters; depend on the execution gateway protocols instead."
+
+[tool.ruff.lint.per-file-ignores]
+# The exchange adapter layer is the single place allowed to import the SDK.
+"src/exchange/*" = ["TID251"]
 
 [tool.coverage.run]
 source = ["src"]

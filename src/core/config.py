@@ -8,9 +8,13 @@ from enum import Enum
 from typing import Optional
 from uuid import uuid4
 
-from hyperliquid.utils import constants
-
 from .base_config import BaseStrategyConfig
+
+# Exchange endpoint literals (mirror hyperliquid.utils.constants so the core
+# layer does not import the exchange SDK; adapters in src/exchange own that
+# dependency).
+MAINNET_API_URL = "https://api.hyperliquid.xyz"
+TESTNET_API_URL = "https://api.hyperliquid-testnet.xyz"
 
 
 class Side(Enum):
@@ -97,14 +101,14 @@ class BotConfig(BaseStrategyConfig):
     @property
     def API_URL(self) -> str:
         if self.USE_TESTNET:
-            return constants.TESTNET_API_URL
-        return constants.MAINNET_API_URL
+            return TESTNET_API_URL
+        return MAINNET_API_URL
 
     @property
     def INFO_URL(self) -> str:
         if self.USE_TESTNET:
-            return constants.TESTNET_API_URL
-        return constants.MAINNET_API_URL
+            return TESTNET_API_URL
+        return MAINNET_API_URL
 
     @property
     def WS_URL(self) -> str:

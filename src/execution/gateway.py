@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from ..core.config import Side
 from .models import (
@@ -21,6 +21,7 @@ from .models import (
 )
 
 
+@runtime_checkable
 class TradingGateway(Protocol):
     """Minimal exchange contract required by the execution lifecycle."""
 
@@ -29,6 +30,25 @@ class TradingGateway(Protocol):
     async def get_positions(self) -> PositionRead: ...
 
     async def get_recent_fills(self, limit: int = 100) -> list[dict]: ...
+
+
+@runtime_checkable
+class MarketDataGateway(Protocol):
+    """Read-only market-data contract for strategies.
+
+    Strategies depend on this port instead of constructing exchange SDK
+    clients themselves; only exchange adapters implement the SDK directly.
+    """
+
+    async def get_meta_and_asset_ctxs(self) -> tuple[dict, list[dict]]: ...
+
+    async def get_candles(
+        self,
+        coin: str,
+        interval: str,
+        start_time_ms: int,
+        end_time_ms: int,
+    ) -> list[dict]: ...
 
 
 @dataclass
