@@ -36,9 +36,9 @@ jobs:
           test -f requirements.lock
           grep -q "pip-compile" requirements.lock
       - name: Lint
-        run: ruff check src/ tests/ run_*.py bot_api_server.py hype_dashboard.py
+        run: ruff check src/ tests/ run_*.py bot_api_server.py hype_dashboard.py scripts/*.py
       - name: Format check
-        run: ruff format --check src/ tests/ run_*.py bot_api_server.py hype_dashboard.py
+        run: ruff format --check src/ tests/ run_*.py bot_api_server.py hype_dashboard.py scripts/*.py
       - name: Dependency audit
         run: pip-audit -r requirements.txt
 
