@@ -6,6 +6,18 @@ on:
   pull_request:
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      smoke_live:
+        description: "Set to true to place real (testnet) smoke orders"
+        type: choice
+        options: ["false", "true"]
+        default: "false"
+      smoke_coin:
+        description: "Testnet coin to exercise"
+        default: "PURR"
+      smoke_notional:
+        description: "Taker order notional in USD"
+        default: "11"
 
 jobs:
   quality:
@@ -57,7 +69,27 @@ jobs:
     environment: protected-testnet
     steps:
       - uses: actions/checkout@v4
-      - name: Release-only smoke placeholder
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install locked dependencies
+        run: python -m pip install -r requirements.lock
+      - name: Smoke self-test (scripted gateway, no network)
+        run: python scripts/testnet_smoke.py --mode self-test
+      - name: Live testnet lifecycle smoke
+        if: inputs.smoke_live == 'true'
+        env:
+          USE_TESTNET: true
+          PRIVATE_KEY: ${{ secrets.TESTNET_PRIVATE_KEY }}
+          ADDRESS: ${{ secrets.TESTNET_ADDRESS }}
         run: |
-          echo "Run bounded testnet lifecycle smoke tests with dedicated credentials."
-          echo "Mainnet execution remains source-gated until this workflow is implemented."
+          python scripts/testnet_smoke.py --mode live \
+            --coin "${{ inputs.smoke_coin || 'PURR' }}" \
+            --notional "${{ inputs.smoke_notional || '11' }}" \
+            --i-understand
+      - name: Release-gate note
+        run: |
+          echo "A passing live smoke completes the execution-lifecycle item of"
+          echo "the release checklist. Mainnet execution remains source-gated"
+          echo "until the full checklist is approved (src/core/safety.py)."

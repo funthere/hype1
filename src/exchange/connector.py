@@ -4,6 +4,7 @@ Hyperliquid Exchange API connector using official SDK
 
 import asyncio
 import logging
+import math
 from typing import List, Optional, Dict
 
 from eth_account import Account
@@ -633,3 +634,25 @@ class HyperliquidAPI:
         except Exception as e:
             logger.error(f"Failed to get spot mid for {coin}: {e}")
             return None
+
+    async def get_sz_decimals(self, coin: Optional[str] = None) -> int:
+        """Get the exchange size precision (szDecimals) for a coin."""
+        target_coin = coin or self.config.ASSET
+        await self.get_asset_index(target_coin)
+        meta_data = await asyncio.to_thread(self.info.meta)
+        for asset in meta_data["universe"]:
+            if asset["name"] == target_coin:
+                return int(asset.get("szDecimals", 0))
+        raise ValueError(f"{target_coin} not found in universe")
+
+    async def round_size(self, coin: Optional[str], quantity: float) -> float:
+        """Floor a quantity to the exchange's size precision for a coin.
+
+        Orders with more precision than szDecimals are rejected by the
+        exchange; flooring guarantees a valid size (never rounds up into
+        more exposure than requested).
+        """
+        target_coin = coin or self.config.ASSET
+        sz_decimals = await self.get_sz_decimals(target_coin)
+        factor = 10**sz_decimals
+        return math.floor(quantity * factor) / factor
