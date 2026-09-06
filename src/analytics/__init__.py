@@ -14,6 +14,13 @@ from .walk_forward import (
     WalkForwardResult,
     WalkForwardValidator,
 )
+from .candle_backfill import (
+    FetchWindow,
+    backfill,
+    build_fetch_windows,
+    candles_to_frame,
+    interval_to_ms,
+)
 from .adaptive import (
     AdaptiveParameterManager,
     VolatilityDetector,
@@ -43,4 +50,9 @@ __all__ = [
     "SimulatedTrade",
     "WalkForwardResult",
     "WalkForwardValidator",
+    "FetchWindow",
+    "backfill",
+    "build_fetch_windows",
+    "candles_to_frame",
+    "interval_to_ms",
 ]
