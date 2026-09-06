@@ -911,13 +911,18 @@ class TrendFollowingStrategy:
 
             # Calculate ATR
             atr = self._calculate_atr(df, self.config.ATR_PERIOD)
-            if atr is None or atr.iloc[-1] <= 0:
+            if atr is None or pd.isna(atr.iloc[-1]) or atr.iloc[-1] <= 0:
                 return None
             current_atr = atr.iloc[-1]
 
             # Calculate ADX
             adx = self._calculate_adx(df, self.config.ADX_PERIOD)
-            if adx is None or adx.iloc[-1] < self.config.ADX_THRESHOLD:
+            adx_value = adx.iloc[-1] if adx is not None else None
+            # nan ADX means trend strength is unmeasurable; `nan < threshold`
+            # is False in float comparison, so this must fail closed.
+            if adx_value is None or pd.isna(adx_value):
+                return None
+            if adx_value < self.config.ADX_THRESHOLD:
                 return None  # Trend too weak
 
             current_price = close.iloc[-1]
@@ -947,6 +952,9 @@ class TrendFollowingStrategy:
             rsi = self._calculate_rsi(close, self.config.RSI_PERIOD)
             if rsi is not None:
                 current_rsi = rsi.iloc[-1]
+                # Unmeasurable RSI cannot confirm the entry — fail closed.
+                if pd.isna(current_rsi):
+                    return None
                 if (
                     side == TrendPositionSide.LONG
                     and current_rsi > self.config.RSI_OVERBOUGHT
@@ -971,7 +979,7 @@ class TrendFollowingStrategy:
                     return None  # Low volume, skip
 
             # Confidence score (0-100)
-            adx_score = min(adx.iloc[-1] / 50.0, 1.0) * 40  # Up to 40 pts
+            adx_score = min(adx_value / 50.0, 1.0) * 40  # Up to 40 pts
             trend_score = (
                 30
                 if (side == TrendPositionSide.LONG and current_price > current_trend)
@@ -994,7 +1002,7 @@ class TrendFollowingStrategy:
                 "fast_ema": current_fast,
                 "slow_ema": current_slow,
                 "trend_ema": current_trend,
-                "adx": adx.iloc[-1],
+                "adx": adx_value,
             }
 
         except Exception as exc:
@@ -1060,10 +1068,22 @@ class TrendFollowingStrategy:
             plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
             minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
 
-            # Smoothed averages
+            # Smoothed averages. The DM series must carry the frame's index:
+            # a freshly-built RangeIndex would misalign with `atr` on any
+            # frame whose labels are not 0-based and produce nan at the
+            # newest candle via union-join division.
+            frame_index = high.index
             atr = tr.rolling(window=period).mean()
-            plus_di = 100 * pd.Series(plus_dm).rolling(window=period).mean() / atr
-            minus_di = 100 * pd.Series(minus_dm).rolling(window=period).mean() / atr
+            plus_di = (
+                100
+                * pd.Series(plus_dm, index=frame_index).rolling(window=period).mean()
+                / atr
+            )
+            minus_di = (
+                100
+                * pd.Series(minus_dm, index=frame_index).rolling(window=period).mean()
+                / atr
+            )
 
             # DX and ADX
             dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)

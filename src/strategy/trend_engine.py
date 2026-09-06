@@ -54,7 +54,7 @@ class TrendFollowingEngine:
         self._frame = self._frame.drop_duplicates(subset="timestamp", keep="last")
         self._frame = self._frame.sort_values("timestamp").reset_index(drop=True)
         if len(self._frame) > self._max_rows:
-            self._frame = self._frame.iloc[-self._max_rows :]
+            self._frame = self._frame.iloc[-self._max_rows :].reset_index(drop=True)
 
     def generate_signal(self, capital: float) -> Optional[Dict]:
         """Translate a trend signal into the harness's tp/sl/quantity shape."""
