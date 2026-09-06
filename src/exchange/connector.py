@@ -49,12 +49,19 @@ class HyperliquidAPI:
         self._last_error = None
 
     async def check_connection(self) -> bool:
-        """Check if API connection is healthy"""
+        """Probe the exchange with a live request.
+
+        Deliberately avoids get_asset_index for the configured asset: that
+        result is cached, so a repeat check would report healthy without
+        touching the network.
+        """
         try:
-            await self.get_asset_index()
+            await asyncio.to_thread(self.info.meta)
             self._connected = True
             self._last_error = None
             return True
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             self._connected = False
             self._last_error = str(e)
