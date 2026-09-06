@@ -65,6 +65,9 @@ data/
 raw_data/
 historical_data/
 
+# Runtime state
+hyperevm_farm_state.json
+
 # Logs
 *.log
 logs/
