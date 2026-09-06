@@ -453,3 +453,62 @@ class TestScanCache:
         # Mutating the returned copy must not affect the strategy's cache
         cached.clear()
         assert strategy.last_opportunities == rates
+
+
+# ---------------------------------------------------------------------------
+# Live order direction (regression: the strategy's own PositionSide enum
+# compared False against Side and would have sold every live LONG entry)
+# ---------------------------------------------------------------------------
+
+
+class TestLiveOrderDirection:
+    @pytest.mark.asyncio
+    async def test_open_long_places_buy(self, mock_api, mock_db):
+        from src.core.config import Side as CoreSide
+
+        cfg = FundingArbConfig(
+            PAPER_TRADING=False,
+            USE_TESTNET=True,
+            PRIVATE_KEY="0x" + "1" * 64,
+            ADDRESS="0x" + "1" * 40,
+            SPOT_HEDGE_ENABLED=False,
+        )
+        cfg.validate()
+        strategy = FundingRateArbStrategy(cfg, mock_api, mock_db)
+        strategy.api.place_order = AsyncMock(return_value={"status": "ok"})
+        strategy.api.get_balance = AsyncMock(return_value={"account_value": 10_000})
+
+        await strategy.open_position(
+            "BTC", PositionSide.LONG, rate=0.001, mark_px=50_000.0
+        )
+
+        kwargs = strategy.api.place_order.call_args.kwargs
+        assert kwargs["side"] == CoreSide.LONG
+
+    @pytest.mark.asyncio
+    async def test_close_short_places_buy(self, mock_api, mock_db):
+        from src.core.config import Side as CoreSide
+
+        cfg = FundingArbConfig(
+            PAPER_TRADING=False,
+            USE_TESTNET=True,
+            PRIVATE_KEY="0x" + "1" * 64,
+            ADDRESS="0x" + "1" * 40,
+            SPOT_HEDGE_ENABLED=False,
+        )
+        cfg.validate()
+        strategy = FundingRateArbStrategy(cfg, mock_api, mock_db)
+        strategy.api.place_order = AsyncMock(return_value={"status": "ok"})
+        pos_id = await strategy.open_position(
+            "BTC", PositionSide.SHORT, rate=0.001, mark_px=50_000.0
+        )
+        strategy.api.place_order.reset_mock()
+
+        closed = await strategy.close_position(
+            pos_id, "rate_reverted", current_price=49_000.0
+        )
+
+        assert closed is True
+        kwargs = strategy.api.place_order.call_args.kwargs
+        assert kwargs["side"] == CoreSide.LONG  # closing a SHORT buys back
+        assert kwargs["reduce_only"] is True

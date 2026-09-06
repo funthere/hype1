@@ -537,3 +537,45 @@ class TestConnectionState:
         assert await api.check_connection() is False
         assert api.is_connected is False
         assert "rpc down" in api.last_error
+
+
+@pytest.mark.contract
+class TestSideCoercion:
+    """Regression: the connector compared `side == Side.LONG` against plain
+    strings and foreign enums, evaluating False — every live order from the
+    strategies would have been a SELL, including LONG entries. Any side-like
+    value must coerce at the boundary."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_side", ["BUY", "", 123, None])
+    async def test_unusable_side_raises(self, api, bad_side):
+        with pytest.raises(ValueError):
+            await api.place_order(side=bad_side, price=30.0, quantity=1.0)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "side_value,expected_is_buy",
+        [
+            (Side.LONG, True),
+            (Side.SHORT, False),
+            ("LONG", True),
+            ("SHORT", False),
+        ],
+    )
+    async def test_place_order_direction(self, api, side_value, expected_is_buy):
+        api.exchange.order = Mock(return_value=ok_order_response())
+
+        await api.place_order(side=side_value, price=30.0, quantity=1.0)
+
+        assert api.exchange.order.call_args.kwargs["is_buy"] is expected_is_buy
+
+    @pytest.mark.asyncio
+    async def test_foreign_enum_with_matching_value_is_accepted(self, api):
+        from enum import Enum
+
+        class ForeignSide(Enum):
+            LONG = "LONG"
+
+        api.exchange.order = Mock(return_value=ok_order_response())
+        await api.place_order(side=ForeignSide.LONG, price=30.0, quantity=1.0)
+        assert api.exchange.order.call_args.kwargs["is_buy"] is True

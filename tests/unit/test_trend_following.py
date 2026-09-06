@@ -60,7 +60,7 @@ def build_frame(drift, amp, freq, pull, n=90, base=100.0):
 
 
 def make_strategy(**config_overrides) -> TrendFollowingStrategy:
-    cfg = TrendFollowingConfig(PAPER_TRADING=True, **config_overrides)
+    cfg = TrendFollowingConfig(**{"PAPER_TRADING": True, **config_overrides})
     api = Mock()
     api.get_mids = AsyncMock(return_value={})
     db = Mock()
@@ -427,3 +427,51 @@ class TestUnmeasurableIndicators:
 
         assert not adx_zero_based.iloc[-1] != adx_zero_based.iloc[-1]  # not nan
         assert adx_shifted.iloc[-1] == pytest.approx(adx_zero_based.iloc[-1])
+
+
+# ---------------------------------------------------------------------------
+# Live order direction (regression: string sides compared False against
+# Side and would have sold every live LONG entry)
+# ---------------------------------------------------------------------------
+
+
+class TestLiveOrderDirection:
+    def _live_strategy(self):
+        from src.core.config import Side as CoreSide
+
+        strategy = make_strategy(
+            PAPER_TRADING=False,
+            PRIVATE_KEY="0x" + "1" * 64,
+            ADDRESS="0x" + "1" * 40,
+        )
+        strategy.api.place_order = AsyncMock(return_value={"status": "ok"})
+        strategy.api.get_balance = AsyncMock(return_value={"account_value": 10_000})
+        return strategy, CoreSide
+
+    @pytest.mark.asyncio
+    async def test_open_long_places_buy(self):
+        strategy, CoreSide = self._live_strategy()
+
+        await strategy.open_position(
+            "TEST", TrendPositionSide.LONG, price=100.0, atr=1.0
+        )
+
+        kwargs = strategy.api.place_order.call_args.kwargs
+        assert kwargs["side"] == CoreSide.LONG
+
+    @pytest.mark.asyncio
+    async def test_close_long_places_sell(self):
+        strategy, CoreSide = self._live_strategy()
+
+        pos_id = await strategy.open_position(
+            "TEST", TrendPositionSide.LONG, price=100.0, atr=1.0
+        )
+        strategy.api.place_order.reset_mock()
+        closed = await strategy.close_position(
+            pos_id, "take_profit", current_price=105.0
+        )
+
+        assert closed is True
+        kwargs = strategy.api.place_order.call_args.kwargs
+        assert kwargs["side"] == CoreSide.SHORT
+        assert kwargs["reduce_only"] is True
