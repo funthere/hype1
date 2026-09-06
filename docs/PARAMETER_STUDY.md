@@ -70,10 +70,52 @@ floor, and the multiplicity of the grid (three configs) means the best
 row is the most likely to be luck. T2 advances to a fresh out-of-sample
 window (new data, same parameters, pre-committed); nothing is promoted.
 
+## Prior-window re-test (2026-09-05, same day)
+
+The study window (most recent 90 days) was used to select T2, so it cannot
+also confirm it. The **prior 90 days** (roughly 2026-03 → 2026-06, the
+first half of the 180-day backfill) were never touched by any config
+choice, making them a legitimate pre-committed out-of-sample window.
+
+**Decision rule, stated before running:** T2 survives if its aggregate
+profit factor across the four coins is ≥ 1.0 on the prior window. Fold
+geometry, fees, and capital identical to the study; parameters frozen at
+T2's committed values (ATR stop 3.0x, trailing 3.5x); no re-tuning.
+
+| Config | Trades | Net PnL | Aggregate PF | Per-coin PF |
+|---|---|---|---|---|
+| T0 baseline | 80 | +$320 | 1.38 | 1.01 / 1.99 / 1.59 / 1.62 |
+| **T2 wide stop** | **69** | **+$363** | **1.44** | 1.53 / 1.71 / 0.99 / 1.66 |
+
+**Result: T2 survives its criterion.** Combined with the study window,
+T2 is the only configuration in the grid that is aggregate-positive on
+**both** windows (T0 is −$135 on the study window): 121 trades total,
+positive net on each window independently, and its one study-window
+loser (ETH) is flat rather than bad here.
+
+**Honest reading, three caveats:**
+
+1. The prior window was simply more trend-friendly — even the baseline is
+   profitable on it. The window confirms "no harm", not "wide stop adds
+   edge"; T2 vs T0 within the prior window is roughly a tie (+$363 vs
+   +$320).
+2. Per-coin trade counts (28–35 across both windows) only now reach the
+   scorecard's 30-trade confidence floor at the portfolio level, not per
+   coin.
+3. Same-day selection and test share one instrument universe and data
+   vendor; a live-forward paper period remains the real test.
+
+**Disposition: T2 earns live-forward paper trading** — run the trend
+runner with `ATR_STOP_MULT=3.0, TRAILING_STOP_MULT=3.5` under the
+scorecard, alongside the funding-arb paper experiment. Mainnet remains
+gated; nothing here changes that.
+
 ## Reproduce
 
 ```bash
 python3 scripts/backfill_candles.py --coin HYPE --interval 15m --days 90
 python3 scripts/backfill_candles.py --coin BTC --interval 1h --days 90  # + ETH, SOL, HYPE 1h
 python3 scripts/run_parameter_study.py
+# prior-window re-test: backfill 180d, slice candles earlier than the
+# study window's first timestamp, run T2 overrides through the validator
 ```
