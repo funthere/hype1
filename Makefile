@@ -163,12 +163,12 @@ test:
 # Run linter
 lint:
 	@echo "Running linter..."
-	@ruff check src/ tests/ run_*.py bot_api_server.py hype_dashboard.py
+	@ruff check src/ tests/ run_*.py bot_api_server.py hype_dashboard.py scripts/*.py
 
 # Format code
 format:
 	@echo "Formatting code..."
-	@ruff format src/ tests/ run_*.py bot_api_server.py hype_dashboard.py
+	@ruff format src/ tests/ run_*.py bot_api_server.py hype_dashboard.py scripts/*.py
 
 # Run cross-exchange funding rate arb (paper)
 run-cross-arb:

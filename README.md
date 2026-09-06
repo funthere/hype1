@@ -11,13 +11,32 @@ operation, strategy analytics, SQLite persistence, and a Streamlit dashboard.
 ## Features
 
 - Modular core, exchange, bot, storage, notification, and analytics layers
+- Typed execution lifecycle with gateway contracts; order acknowledgement is
+  never treated as a fill
 - Paper trading with deterministic local fills
-- Testnet support for bounded, supervised experiments
+- Testnet support for bounded, supervised experiments, plus a runtime
+  execution smoke check (`scripts/testnet_smoke.py`)
 - SQLite persistence with execution lifecycle state and fill-idempotency ledger
 - Circuit breaker, daily-loss, position-count, and notional risk controls
+- Walk-forward validation harness, pre-registered parameter studies, and a
+  strategy scorecard with an auto-retire policy
 - Telegram notifications and Streamlit monitoring dashboard
 - Recovery/reconciliation that treats unavailable exchange state as unknown,
   never as a flat account
+
+## Strategy program
+
+Strategies earn capital through evidence, not opinion:
+
+| Strategy | Status | Evidence |
+| --- | --- | --- |
+| Trend following (pullback entry, wide ATR stop) | Live-forward paper | Positive aggregate on two disjoint 90-day windows; accumulating live-forward data |
+| Funding-rate arbitrage | Live-forward paper | Direction-independent edge; entry path instrumented, paper capital persists across restarts |
+| Momentum (HYPE 15m) | Retired | Profit factor 0.44–0.72 under every pre-registered configuration |
+| Cross-exchange arbitrage | Frozen | Funding-sign defect fixed; both-leg execution unimplemented |
+
+Full numbers and methodology: [docs/PARAMETER_STUDY.md](docs/PARAMETER_STUDY.md)
+and [docs/WALKFORWARD_RESULTS.md](docs/WALKFORWARD_RESULTS.md).
 
 ## Quick start: paper mode
 
@@ -54,6 +73,27 @@ Position size is derived from the account-risk budget and **entry-to-stop
 distance**. Leverage limits margin feasibility; it never multiplies loss at the
 stop. Invalid or uncapped sizes are rejected.
 
+## Evidence tooling
+
+```bash
+# Backfill candle history through the gateway seam
+python3 scripts/backfill_candles.py --coin HYPE --interval 1h --days 90
+
+# Walk-forward validation of a strategy over that history
+python3 scripts/run_walk_forward.py --csv data/HYPE_1h_90d.csv \
+    --strategy trend --train 1200 --test 480
+
+# The pre-registered configuration study (all results disclosed)
+python3 scripts/run_parameter_study.py
+
+# Bounded execution smoke — self-test needs no credentials
+python3 scripts/testnet_smoke.py --mode self-test
+```
+
+The live smoke runs testnet orders only via manual workflow dispatch against
+the `protected-testnet` environment, and an `UNKNOWN` order outcome aborts
+with exit 2 rather than retrying.
+
 ## Operational recovery
 
 When a live/testnet process stops or reports uncertain execution state:
@@ -73,12 +113,13 @@ See [the incident runbook](docs/INCIDENT_RESPONSE.md) and
 ```text
 src/
 ├── core/        # Configuration, risk policy, models, and strategy logic
-├── execution/   # Typed lifecycle, gateway contract, and test gateway
-├── exchange/    # Hyperliquid adapter and market-data feed
+├── execution/   # Typed lifecycle, gateway contracts, execution smoke check
+├── exchange/    # Hyperliquid/Binance adapters and market-data feed
 ├── bot/         # Orchestration, reconciliation, and accounting
 ├── storage/     # SQLite persistence and idempotent execution-fill ledger
+├── strategy/    # Trend following, arbitrage strategies, harness adapters
 ├── notifications/
-└── analytics/
+└── analytics/   # Performance, scorecard, walk-forward harness, backfill
 ```
 
 The lifecycle boundary distinguishes order submission from execution: a live

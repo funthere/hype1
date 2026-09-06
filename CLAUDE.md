@@ -44,12 +44,19 @@ This is a HYPE/USDC trading bot for Hyperliquid DEX using a modular architecture
   - `src/core/strategy.py` - Strategy logic and risk management
   - `src/core/survival_risk.py` - Survival risk manager (position heat, tiered risk)
   - `src/core/multi_asset.py` - Multi-asset trading with correlation filtering
-  - `src/exchange/connector.py` - Hyperliquid API wrapper using SDK
+  - `src/exchange/connector.py` - Hyperliquid API adapter (SDK lives only here)
   - `src/exchange/market_data.py` - WebSocket market data feed
+  - `src/execution/` - Gateway protocols (`TradingGateway`, `MarketDataGateway`),
+    lifecycle models, `InMemoryGateway` test double, and the bounded
+    `TestnetSmokeCheck`
+  - `src/strategy/` - Trend following (+ `trend_engine` harness adapter),
+    funding-rate arb, cross-exchange arb
   - `src/bot/trading_bot.py` - Main trading bot orchestrator
   - `src/storage/database.py` - SQLite persistence
   - `src/notifications/telegram.py` - Telegram notifications
-  - `src/analytics/` - Performance, health, and adaptive analytics modules
+  - `src/analytics/` - Performance, health, adaptive analytics,
+    `StrategyScorecard` (expectancy/PF/drawdown with retire policy),
+    `WalkForwardValidator`, and candle backfill
 
 ### Entry Points
 - `run_paper_bot.py` - Paper trading (simulated, no API keys needed)
@@ -59,6 +66,13 @@ This is a HYPE/USDC trading bot for Hyperliquid DEX using a modular architecture
 - `run_multi_asset_bot.py` - Multi-asset trading (experimental)
 - `bot_api_server.py` - FastAPI server for dashboard
 - `hype_dashboard.py` - Streamlit dashboard
+
+### Tooling Scripts (`scripts/`)
+- `backfill_candles.py` - Fetch candle history into `data/` via the gateway seam
+- `run_walk_forward.py` - Walk-forward validation over a candle CSV
+- `run_parameter_study.py` - Pre-registered configuration study (all results disclosed)
+- `testnet_smoke.py` - Bounded execution smoke; `--mode self-test` needs no credentials,
+  `--mode live` requires testnet credentials plus `--i-understand`
 
 ### Key Design Patterns
 
@@ -120,12 +134,3 @@ The bot loads `.env` automatically via `load_dotenv()` at module import.
 
 6. **Database**: SQLite stores positions, trades, events. Database file: `trading_bot.db` (gitignored).
 
-## Entry Points
-
-- `run_paper_bot.py` - Paper trading (no credentials needed)
-- `run_testnet_bot.py` - Testnet trading (requires `PRIVATE_KEY`, `ADDRESS` in env)
-- `run_mainnet_bot.py` - Mainnet trading (REAL MONEY - requires credentials)
-- `run_modular_bot.py` - Alternative entry with CLI arguments (paper/testnet/mainnet)
-- `run_multi_asset_bot.py` - Multi-asset trading (experimental)
-- `hype_dashboard.py` - Streamlit dashboard (connects to bot's API server)
-- `bot_api_server.py` - FastAPI server (used by bot internally, duck-typed)
