@@ -1,5 +1,13 @@
 # Walk-Forward Validation — First Results
 
+> **CORRECTION (2026-09-05, later same day):** the trend-following rows
+> below were measured before two defects were found — a nan fail-open in
+> the ADX gate and an index-misalignment that made ADX nan at the newest
+> candle inside the walk-forward adapter. With a functioning gate the
+> trend numbers change materially; see `docs/PARAMETER_STUDY.md`, which
+> supersedes this document's trend section. The momentum section is
+> unaffected (momentum does not use ADX).
+
 **Run date:** 2026-09-05 · **Data:** Hyperliquid, backfilled via `scripts/backfill_candles.py`
 **Harness:** `src/analytics/walk_forward.py` · **Run commands:** `scripts/run_walk_forward.py`
 

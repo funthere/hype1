@@ -364,3 +364,66 @@ class TestScorecardIntegration:
         assert scorecard["expectancy"] > 0  # closed in profit
         assert scorecard["retire_recommended"] is False  # insufficient data
         assert strategy.scorecard.trade_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Unmeasurable indicators must fail closed
+# ---------------------------------------------------------------------------
+
+
+class TestUnmeasurableIndicators:
+    """Regression: `nan < threshold` is False in float comparison, so a nan
+    indicator value silently passed every guard. On real data the rolling
+    ADX degenerates to nan often enough that the regime gate was largely
+    vacuous (an ADX_THRESHOLD=100 control still produced 20 trades)."""
+
+    GOOD_FRAME = dict(drift=0.003, amp=0.006, freq=1.7, pull=0.004)
+
+    def test_control_frame_signals_normally(self):
+        strategy = make_strategy()
+        df = build_frame(**self.GOOD_FRAME)
+        assert strategy._analyze_trend("TEST", df) is not None
+
+    def _patch(self, strategy, method, series_mutator):
+        real = getattr(TrendFollowingStrategy, method)
+
+        def patched(*args, **kwargs):
+            series = real(*args, **kwargs)
+            if series is not None:
+                series.iloc[-1] = series_mutator
+            return series
+
+        setattr(strategy, method, patched)
+
+    def test_nan_adx_blocks_signal(self):
+        strategy = make_strategy()
+        df = build_frame(**self.GOOD_FRAME)
+        self._patch(strategy, "_calculate_adx", float("nan"))
+        assert strategy._analyze_trend("TEST", df) is None
+
+    def test_nan_atr_blocks_signal(self):
+        strategy = make_strategy()
+        df = build_frame(**self.GOOD_FRAME)
+        self._patch(strategy, "_calculate_atr", float("nan"))
+        assert strategy._analyze_trend("TEST", df) is None
+
+    def test_nan_rsi_blocks_signal(self):
+        strategy = make_strategy()
+        df = build_frame(**self.GOOD_FRAME)
+        self._patch(strategy, "_calculate_rsi", float("nan"))
+        assert strategy._analyze_trend("TEST", df) is None
+
+    def test_calculate_adx_is_index_aligned(self):
+        """Regression: _calculate_adx built its DM series with a fresh
+        RangeIndex, so any frame whose labels were not 0-based (e.g. a
+        trimmed rolling window) produced nan at the newest candle via
+        union-join division."""
+        df = build_frame(**self.GOOD_FRAME).drop(columns=["t"])
+        adx_zero_based = TrendFollowingStrategy._calculate_adx(df, 14)
+
+        shifted = df.copy()
+        shifted.index = shifted.index + 7  # non-zero-based labels
+        adx_shifted = TrendFollowingStrategy._calculate_adx(shifted, 14)
+
+        assert not adx_zero_based.iloc[-1] != adx_zero_based.iloc[-1]  # not nan
+        assert adx_shifted.iloc[-1] == pytest.approx(adx_zero_based.iloc[-1])

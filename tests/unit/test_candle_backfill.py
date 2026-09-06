@@ -13,6 +13,7 @@ from src.analytics import (
 )
 from src.core.config import Side
 from src.strategy.trend_engine import TrendFollowingEngine
+from src.strategy.trend_following import TrendFollowingConfig
 
 
 # ---------------------------------------------------------------------------
@@ -242,3 +243,35 @@ class TestTrendFollowingEngine:
             )
         assert len(engine._frame) == 200
         assert engine._frame["timestamp"].iloc[0] == 300
+
+
+class TestEngineWindowIndexHealth:
+    """Regression: after the 200-row trim, index labels must stay 0-based so
+    indicator internals cannot misalign; ADX at the newest candle must be a
+    real number, not nan."""
+
+    def test_adx_at_newest_candle_is_real_after_trim(self):
+
+        from src.strategy.trend_following import TrendFollowingStrategy
+
+        engine = TrendFollowingEngine(TrendFollowingConfig(PAPER_TRADING=True))
+        price = 100.0
+        for i in range(400):
+            step = 1.0 if i % 2 == 0 else -0.6
+            price = max(price + step, 50.0)
+            engine.update_candle(
+                {
+                    "timestamp": i,
+                    "open": price - step,
+                    "high": max(price, price - step) + 0.2,
+                    "low": min(price, price - step) - 0.2,
+                    "close": price,
+                    "volume": 10.0,
+                }
+            )
+
+        assert len(engine._frame) == 200
+        assert engine._frame.index[0] == 0  # labels stay 0-based after trim
+
+        adx = TrendFollowingStrategy._calculate_adx(engine._frame, 14)
+        assert not pd.isna(adx.iloc[-1])
