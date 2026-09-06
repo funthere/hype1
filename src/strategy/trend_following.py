@@ -358,7 +358,7 @@ class TrendFollowingStrategy:
                 )
             else:
                 result = await self.api.place_order(
-                    side=side.value,
+                    side=Side(side.value),
                     price=price,
                     quantity=quantity,
                 )
@@ -457,7 +457,7 @@ class TrendFollowingStrategy:
                     else TrendPositionSide.SHORT
                 )
                 result = await self.api.place_order(
-                    side=close_side.value,
+                    side=Side(close_side.value),
                     price=current_price,
                     quantity=pos.quantity,
                     reduce_only=True,

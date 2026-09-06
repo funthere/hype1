@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 from ..core.base_config import BaseStrategyConfig
+from ..core.config import Side
 from ..execution import MarketDataGateway
 
 logger = logging.getLogger(__name__)
@@ -413,7 +414,7 @@ class FundingRateArbStrategy:
             else:
                 # Live order via API
                 result = await self.api.place_order(
-                    side=side,  # type: ignore[arg-type]
+                    side=Side(side.value),
                     price=mark_px,
                     quantity=quantity,
                 )
@@ -532,7 +533,7 @@ class FundingRateArbStrategy:
                     else PositionSide.SHORT
                 )
                 result = await self.api.place_order(
-                    side=close_side,  # type: ignore[arg-type]
+                    side=Side(close_side.value),
                     price=current_price,
                     quantity=pos.quantity,
                     reduce_only=True,

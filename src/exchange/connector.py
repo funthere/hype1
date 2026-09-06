@@ -110,6 +110,20 @@ class HyperliquidAPI:
                     continue
         return None
 
+    @staticmethod
+    def _coerce_side(side) -> Side:
+        """Normalize any side-like value (Side, str, or foreign enum) to Side.
+
+        Side direction comparisons must never silently fail: a plain string
+        or a foreign enum compared against ``Side`` evaluates False and used
+        to flip every order to a sell.
+        """
+        raw = getattr(side, "value", side)
+        try:
+            return Side(raw)
+        except ValueError:
+            raise ValueError(f"Unusable order side: {side!r}") from None
+
     async def submit_order(self, request: OrderRequest) -> OrderSubmission:
         """Submit one idempotent order without treating acknowledgement as a fill.
 
@@ -117,12 +131,13 @@ class HyperliquidAPI:
         write is ambiguous; callers must reconcile using the stable client ID
         before issuing another request.
         """
+        side = self._coerce_side(request.side)
         try:
             await self.get_asset_index(request.coin)
             raw = await asyncio.to_thread(
                 self.exchange.order,
                 coin=request.coin,
-                is_buy=request.side == Side.LONG,
+                is_buy=side == Side.LONG,
                 sz=request.quantity,
                 limit_px=request.price,
                 order_type=self._order_type(request.order_type),
