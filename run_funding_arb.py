@@ -9,6 +9,7 @@ Usage:
     python3 run_funding_arb.py
     python3 run_funding_arb.py --paper --capital 50000
     python3 run_funding_arb.py --paper --coins BTC,ETH,SOL
+    python3 run_funding_arb.py --paper --db funding_arb.db
 
     # Live mode (requires .env with PRIVATE_KEY / ADDRESS):
     python3 run_funding_arb.py --live
@@ -95,6 +96,13 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated list of coins to monitor (default: ALL)",
     )
     parser.add_argument(
+        "--db",
+        type=str,
+        default="funding_arb.db",
+        help="SQLite database path (default: funding_arb.db; keeps evidence "
+        "isolated from any legacy trading_bot.db)",
+    )
+    parser.add_argument(
         "--entry-threshold",
         type=float,
         default=0.0003,
@@ -165,6 +173,7 @@ def build_config(args: argparse.Namespace) -> FundingArbConfig:
         MAX_CONCURRENT_POSITIONS=args.max_positions,
         CHECK_INTERVAL=args.interval,
         COINS=coins,
+        DATABASE_PATH=args.db,
         API_URL=api_url,
     )
 
