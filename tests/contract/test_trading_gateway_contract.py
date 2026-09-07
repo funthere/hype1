@@ -528,15 +528,22 @@ class TestConnectionState:
         assert api.is_connected is True
         assert api.last_error is None
 
-        # Known caveat: get_asset_index serves the configured asset from
-        # cache, so a repeat check without cache invalidation cannot detect
-        # an outage. Clear the cache the way a long-running process would
-        # after a restart to exercise the failure path.
-        api._asset_index = None
+        # Every check must probe the network: no cached shortcut may report
+        # healthy while the exchange is unreachable.
         api.info.meta = Mock(side_effect=RuntimeError("rpc down"))
         assert await api.check_connection() is False
         assert api.is_connected is False
         assert "rpc down" in api.last_error
+
+    @pytest.mark.asyncio
+    async def test_repeat_checks_probe_the_network(self, api):
+        """Regression: the check used get_asset_index, which serves the
+        configured asset from cache — a repeat check reported healthy
+        without touching the network."""
+        api.info.meta = Mock(return_value=UNIVERSE)
+        assert await api.check_connection() is True
+        assert await api.check_connection() is True
+        assert api.info.meta.call_count >= 2  # probed twice, not cached
 
 
 @pytest.mark.contract
