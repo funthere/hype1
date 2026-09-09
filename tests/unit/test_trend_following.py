@@ -528,9 +528,7 @@ class TestPaperStateContinuity:
         assert restored.trailing_stop == strategy._positions[pos_id].trailing_stop
 
     @pytest.mark.asyncio
-    async def test_closed_trade_restores_capital_scorecard_and_cooldown(
-        self, tmp_path
-    ):
+    async def test_closed_trade_restores_capital_scorecard_and_cooldown(self, tmp_path):
         from src.storage.database import DatabaseManager
 
         db_path = tmp_path / "trend_test.db"
