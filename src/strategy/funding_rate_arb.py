@@ -16,7 +16,7 @@ import json
 import logging
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, fields as dataclass_fields
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -172,6 +172,31 @@ class FundingPosition:
     spot_quantity: float = 0.0  # spot qty held
     spot_realized_pnl: float = 0.0  # PnL from spot on close
 
+    def to_state(self) -> Dict[str, Any]:
+        """Full-fidelity dict for paper-state persistence across restarts."""
+        data: Dict[str, Any] = {}
+        for field in dataclass_fields(self):
+            value = getattr(self, field.name)
+            if isinstance(value, Enum):
+                value = value.value
+            data[field.name] = value
+        return data
+
+    @classmethod
+    def from_state(cls, data: Dict[str, Any]) -> "FundingPosition":
+        """Rebuild a position from :meth:`to_state` output.
+
+        Unknown keys are ignored (forward compatibility); enums are restored
+        from their string values.
+        """
+        payload = dict(data)
+        payload["side"] = PositionSide(payload.get("side", PositionSide.LONG.value))
+        payload["status"] = PositionStatus(
+            payload.get("status", PositionStatus.OPEN.value)
+        )
+        known = {field.name for field in dataclass_fields(cls)}
+        return cls(**{k: v for k, v in payload.items() if k in known})
+
 
 # ---------------------------------------------------------------------------
 # Strategy
@@ -216,7 +241,7 @@ class FundingRateArbStrategy:
         self._paper_state_path: Optional[Path] = None
         if config.PAPER_TRADING and config.PERSIST_PAPER_CAPITAL:
             self._paper_state_path = self._resolve_paper_state_path(config)
-            self._load_paper_capital()
+            self._load_paper_state()
 
     @staticmethod
     def _resolve_paper_state_path(config: FundingArbConfig) -> Optional[Path]:
@@ -225,34 +250,85 @@ class FundingRateArbStrategy:
             return None
         return Path(str(config.DATABASE_PATH) + ".paper_state.json")
 
-    def _load_paper_capital(self) -> None:
-        """Restore paper capital saved by a previous run, if any."""
+    def _load_paper_state(self) -> None:
+        """Restore paper capital and positions saved by a previous run.
+
+        Older state files carry only ``paper_capital``; position lists are
+        optional and entries that cannot be restored are skipped with a
+        warning rather than discarding the rest of the state.
+        """
         path = self._paper_state_path
         if path is None or not path.exists():
             return
         try:
-            saved = json.loads(path.read_text()).get("paper_capital")
-            if isinstance(saved, (int, float)) and saved > 0:
-                self._paper_capital = float(saved)
-                logger.info(
-                    "Restored paper capital %.4f from %s", self._paper_capital, path
-                )
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            logger.warning("Could not restore paper capital from %s: %s", path, exc)
+            saved = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Could not restore paper state from %s: %s", path, exc)
+            return
+        capital = saved.get("paper_capital")
+        if isinstance(capital, (int, float)) and capital > 0:
+            self._paper_capital = float(capital)
+            logger.info(
+                "Restored paper capital %.4f from %s", self._paper_capital, path
+            )
+        restored_open = restored_closed = 0
+        for key in ("open_positions", "closed_positions"):
+            for raw in saved.get(key) or []:
+                try:
+                    pos = FundingPosition.from_state(raw)
+                except Exception as exc:
+                    entry_id = raw.get("id") if isinstance(raw, dict) else raw
+                    logger.warning(
+                        "Skipping unrestorable %s entry %r from %s: %s",
+                        key,
+                        entry_id,
+                        path,
+                        exc,
+                    )
+                    continue
+                self._positions[pos.id] = pos
+                if pos.status == PositionStatus.OPEN:
+                    restored_open += 1
+                else:
+                    restored_closed += 1
+        if restored_open or restored_closed:
+            logger.info(
+                "Restored %d open and %d closed paper position(s) from %s",
+                restored_open,
+                restored_closed,
+                path,
+            )
 
-    def _save_paper_capital(self) -> None:
-        """Persist paper capital so restarts do not reset the experiment."""
+    def _save_paper_state(self) -> None:
+        """Persist capital and the full position book so restarts do not
+        reset the experiment (open positions and closed-trade history
+        included — capital alone orphans positions and loses the
+        scorecard's evidence)."""
         path = self._paper_state_path
         if path is None:
             return
+        positions = list(self._positions.values())
         try:
             path.write_text(
                 json.dumps(
-                    {"paper_capital": self._paper_capital, "saved_at": time.time()}
+                    {
+                        "paper_capital": self._paper_capital,
+                        "open_positions": [
+                            p.to_state()
+                            for p in positions
+                            if p.status == PositionStatus.OPEN
+                        ],
+                        "closed_positions": [
+                            p.to_state()
+                            for p in positions
+                            if p.status == PositionStatus.CLOSED
+                        ],
+                        "saved_at": time.time(),
+                    }
                 )
             )
         except OSError as exc:
-            logger.warning("Could not persist paper capital to %s: %s", path, exc)
+            logger.warning("Could not persist paper state to %s: %s", path, exc)
 
     @property
     def last_opportunities(self) -> List[Dict[str, Any]]:
@@ -400,7 +476,6 @@ class FundingRateArbStrategy:
                 # Simulate entry (apply taker fee)
                 fee = notional * self.config.TAKER_FEE_PCT
                 self._paper_capital -= fee
-                self._save_paper_capital()
                 logger.info(
                     "[PAPER] OPEN %s %s | side=%s qty=%.4f px=%.2f rate=%.6f fee=%.4f",
                     position_id,
@@ -452,6 +527,9 @@ class FundingRateArbStrategy:
                     coin,
                 )
             self._positions[position_id] = pos
+            # Persist after the position is registered so an open position
+            # survives a restart (capital alone would orphan it).
+            self._save_paper_state()
 
             # Log to database
             if self.db:
@@ -515,7 +593,6 @@ class FundingRateArbStrategy:
             if self.config.PAPER_TRADING:
                 fee = abs(pos.notional) * self.config.TAKER_FEE_PCT
                 self._paper_capital += price_pnl - fee
-                self._save_paper_capital()
                 realized_pnl -= fee
                 logger.info(
                     "[PAPER] CLOSE %s %s | reason=%s pnl=%.4f funding=%.4f net=%.4f",
@@ -561,6 +638,10 @@ class FundingRateArbStrategy:
                 spot_pnl = await self._close_spot_hedge(pos, current_price)
                 pos.spot_realized_pnl = spot_pnl
                 realized_pnl += spot_pnl
+
+            # Persist the full book after every mutation (closed history is
+            # the scorecard's evidence and must survive restarts).
+            self._save_paper_state()
 
             # Log to database
             if self.db:
@@ -869,7 +950,7 @@ class FundingRateArbStrategy:
             if self.config.PAPER_TRADING:
                 fee = pos.notional * self.config.TAKER_FEE_PCT
                 self._paper_capital -= fee
-                self._save_paper_capital()
+                self._save_paper_state()
                 logger.info(
                     "[PAPER] SPOT BUY %s | qty=%.4f px=%.2f fee=%.4f",
                     pos.coin,
@@ -934,7 +1015,7 @@ class FundingRateArbStrategy:
                     self._paper_capital += (
                         pos.spot_quantity * pos.spot_entry_price + spot_pnl
                     )
-                    self._save_paper_capital()
+                    self._save_paper_state()
                     logger.info(
                         "[PAPER] SPOT SELL %s | qty=%.4f px=%.2f spot_pnl=%.4f",
                         pos.coin,

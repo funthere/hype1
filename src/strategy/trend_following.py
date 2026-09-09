@@ -20,12 +20,14 @@ weakness in an established trend instead of chasing strength at the cross.
 """
 
 import asyncio
+import json
 import logging
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, fields as dataclass_fields
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -66,6 +68,7 @@ class TrendFollowingConfig(BaseStrategyConfig):
     LEVERAGE: int = 3
     PAPER_TRADING: bool = True
     DATABASE_PATH: str = "trend_following.db"
+    PERSIST_PAPER_CAPITAL: bool = True
 
     # Trend detection
     FAST_EMA_PERIOD: int = 9
@@ -198,6 +201,33 @@ class TrendPosition:
     close_price: Optional[float] = None
     realized_pnl: float = 0.0
 
+    def to_state(self) -> Dict[str, Any]:
+        """Full-fidelity dict for paper-state persistence across restarts."""
+        data: Dict[str, Any] = {}
+        for field in dataclass_fields(self):
+            value = getattr(self, field.name)
+            if isinstance(value, Enum):
+                value = value.value
+            data[field.name] = value
+        return data
+
+    @classmethod
+    def from_state(cls, data: Dict[str, Any]) -> "TrendPosition":
+        """Rebuild a position from :meth:`to_state` output.
+
+        Unknown keys are ignored (forward compatibility); enums are restored
+        from their string values.
+        """
+        payload = dict(data)
+        payload["side"] = TrendPositionSide(
+            payload.get("side", TrendPositionSide.LONG.value)
+        )
+        payload["status"] = TrendPositionStatus(
+            payload.get("status", TrendPositionStatus.OPEN.value)
+        )
+        known = {field.name for field in dataclass_fields(cls)}
+        return cls(**{k: v for k, v in payload.items() if k in known})
+
 
 # ---------------------------------------------------------------------------
 # Strategy
@@ -239,6 +269,142 @@ class TrendFollowingStrategy:
         self.scorecard = StrategyScorecard(
             "trend_following", initial_capital=config.PAPER_CAPITAL
         )
+
+        # Paper-state persistence: capital alone orphans open positions and
+        # loses the scorecard's trade history, so the state file carries the
+        # full book and the scorecard replays DB trade rows on startup.
+        self._paper_state_path: Optional[Path] = None
+        if config.PAPER_TRADING and config.PERSIST_PAPER_CAPITAL:
+            self._paper_state_path = self._resolve_paper_state_path(config)
+            self._load_paper_state()
+            self._restore_scorecard_from_db()
+
+    @staticmethod
+    def _resolve_paper_state_path(config: TrendFollowingConfig) -> Optional[Path]:
+        """State file sits next to the database; None when persistence is off."""
+        if not config.DATABASE_PATH or config.DATABASE_PATH == ":memory:":
+            return None
+        return Path(str(config.DATABASE_PATH) + ".paper_state.json")
+
+    def _load_paper_state(self) -> None:
+        """Restore paper capital and positions saved by a previous run.
+
+        Entries that cannot be restored are skipped with a warning rather
+        than discarding the rest of the state.
+        """
+        path = self._paper_state_path
+        if path is None or not path.exists():
+            return
+        try:
+            saved = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Could not restore paper state from %s: %s", path, exc)
+            return
+        capital = saved.get("paper_capital")
+        if isinstance(capital, (int, float)) and capital > 0:
+            self._paper_capital = float(capital)
+            logger.info(
+                "Restored paper capital %.4f from %s", self._paper_capital, path
+            )
+        restored_open = restored_closed = 0
+        for key in ("open_positions", "closed_positions"):
+            for raw in saved.get(key) or []:
+                try:
+                    pos = TrendPosition.from_state(raw)
+                except Exception as exc:
+                    entry_id = raw.get("id") if isinstance(raw, dict) else raw
+                    logger.warning(
+                        "Skipping unrestorable %s entry %r from %s: %s",
+                        key,
+                        entry_id,
+                        path,
+                        exc,
+                    )
+                    continue
+                self._positions[pos.id] = pos
+                if pos.status == TrendPositionStatus.OPEN:
+                    restored_open += 1
+                else:
+                    restored_closed += 1
+                    if pos.coin not in self._coin_cooldowns:
+                        cooldown_until = (pos.close_time or time.time()) + (
+                            self.config.COOLDOWN_HOURS * 3600
+                        )
+                        self._coin_cooldowns[pos.coin] = max(
+                            self._coin_cooldowns.get(pos.coin, 0.0), cooldown_until
+                        )
+        if restored_open or restored_closed:
+            logger.info(
+                "Restored %d open and %d closed paper position(s) from %s",
+                restored_open,
+                restored_closed,
+                path,
+            )
+
+    def _save_paper_state(self) -> None:
+        """Persist capital and the full position book so restarts do not
+        reset the experiment."""
+        path = self._paper_state_path
+        if path is None:
+            return
+        positions = list(self._positions.values())
+        try:
+            path.write_text(
+                json.dumps(
+                    {
+                        "paper_capital": self._paper_capital,
+                        "open_positions": [
+                            p.to_state()
+                            for p in positions
+                            if p.status == TrendPositionStatus.OPEN
+                        ],
+                        "closed_positions": [
+                            p.to_state()
+                            for p in positions
+                            if p.status == TrendPositionStatus.CLOSED
+                        ],
+                        "saved_at": time.time(),
+                    }
+                )
+            )
+        except OSError as exc:
+            logger.warning("Could not persist paper state to %s: %s", path, exc)
+
+    def _restore_scorecard_from_db(self) -> None:
+        """Replay DB trade rows into the scorecard so a restart keeps the
+        expectancy/PF/drawdown verdict instead of resetting it.
+
+        Best-effort by design: any failure leaves an empty scorecard rather
+        than preventing strategy construction.
+        """
+        if not self.db:
+            return
+        try:
+            rows = self.db.get_trades(limit=10_000)
+            for row in rows:
+                try:
+                    trade = Trade(
+                        side=Side(str(row["side"])),
+                        entry_price=float(row["entry_price"]),
+                        exit_price=float(row["exit_price"] or 0.0),
+                        quantity=float(row["quantity"]),
+                        entry_time=datetime.fromisoformat(str(row["entry_time"])),
+                        exit_time=datetime.fromisoformat(str(row["exit_time"])),
+                        pnl=float(row["pnl"] or 0.0),
+                        fees=float(row["fees"] or 0.0),
+                        notes=str(row.get("notes") or ""),
+                    )
+                    self.scorecard.record(trade)
+                except Exception as exc:
+                    logger.warning("Skipping unrestorable trade row %r: %s", row, exc)
+        except Exception as exc:
+            logger.warning("Could not load trade history for scorecard: %s", exc)
+            return
+        if self.scorecard.trade_count:
+            logger.info(
+                "Replayed %d trade(s) from DB into the scorecard",
+                self.scorecard.trade_count,
+            )
 
     # ------------------------------------------------------------------
     # Public API
@@ -393,6 +559,8 @@ class TrendFollowingStrategy:
                 pos.trailing_stop = stop_loss
 
             self._positions[position_id] = pos
+            # Persist after registration so an open position survives a restart.
+            self._save_paper_state()
 
             if self.db:
                 self.db.log_event(
@@ -484,6 +652,10 @@ class TrendFollowingStrategy:
             self._coin_cooldowns[pos.coin] = time.time() + (
                 self.config.COOLDOWN_HOURS * 3600
             )
+
+            # Persist the full book after every mutation (closed history is
+            # the scorecard's evidence and must survive restarts).
+            self._save_paper_state()
 
             if self.db:
                 self.db.log_event(
