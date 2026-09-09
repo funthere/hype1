@@ -60,7 +60,16 @@ def build_frame(drift, amp, freq, pull, n=90, base=100.0):
 
 
 def make_strategy(**config_overrides) -> TrendFollowingStrategy:
-    cfg = TrendFollowingConfig(**{"PAPER_TRADING": True, **config_overrides})
+    cfg = TrendFollowingConfig(
+        **{
+            "PAPER_TRADING": True,
+            # In-memory sentinel keeps paper-state persistence off unless a
+            # test explicitly opts in with its own tmp_path database — tests
+            # must never read or write the live bot's state file.
+            "DATABASE_PATH": ":memory:",
+            **config_overrides,
+        }
+    )
     api = Mock()
     api.get_mids = AsyncMock(return_value={})
     db = Mock()
@@ -475,3 +484,83 @@ class TestLiveOrderDirection:
         kwargs = strategy.api.place_order.call_args.kwargs
         assert kwargs["side"] == CoreSide.SHORT
         assert kwargs["reduce_only"] is True
+
+
+# ---------------------------------------------------------------------------
+# Paper-state restart continuity
+# ---------------------------------------------------------------------------
+
+
+class TestPaperStateContinuity:
+    """Capital alone cannot survive a restart: open positions would be
+    orphaned and closed-trade history (the scorecard's evidence) lost."""
+
+    @staticmethod
+    def _mock_api():
+        api = Mock()
+        api.get_mids = AsyncMock(return_value={})
+        return api
+
+    @pytest.mark.asyncio
+    async def test_open_position_survives_restart(self, tmp_path):
+        cfg = TrendFollowingConfig(
+            PAPER_TRADING=True, DATABASE_PATH=str(tmp_path / "trend_test.db")
+        )
+        db = Mock()
+        db.log_event = Mock()
+        strategy = TrendFollowingStrategy(cfg, self._mock_api(), db)
+        pos_id = await strategy.open_position(
+            "TEST", TrendPositionSide.LONG, 100.0, 2.0
+        )
+        assert pos_id is not None
+        capital_after_open = strategy._paper_capital
+
+        restarted = TrendFollowingStrategy(cfg, self._mock_api(), db)
+
+        assert restarted._paper_capital == pytest.approx(capital_after_open)
+        restored = restarted._positions.get(pos_id)
+        assert restored is not None
+        assert restored.status == TrendPositionStatus.OPEN
+        assert restored.coin == "TEST"
+        assert restored.entry_price == 100.0
+        assert restored.stop_loss == strategy._positions[pos_id].stop_loss
+        assert restored.take_profit == strategy._positions[pos_id].take_profit
+        assert restored.trailing_stop == strategy._positions[pos_id].trailing_stop
+
+    @pytest.mark.asyncio
+    async def test_closed_trade_restores_capital_scorecard_and_cooldown(self, tmp_path):
+        from src.storage.database import DatabaseManager
+
+        db_path = tmp_path / "trend_test.db"
+        cfg = TrendFollowingConfig(PAPER_TRADING=True, DATABASE_PATH=str(db_path))
+        strategy = TrendFollowingStrategy(
+            cfg, self._mock_api(), DatabaseManager(str(db_path))
+        )
+        pos_id = await strategy.open_position(
+            "TEST", TrendPositionSide.LONG, 100.0, 2.0
+        )
+        assert await strategy.close_position(pos_id, "stop_loss", 90.0) is True
+        original_summary = strategy.get_status()["summary"]
+        assert original_summary["closed_count"] == 1
+
+        restarted = TrendFollowingStrategy(
+            cfg, self._mock_api(), DatabaseManager(str(db_path))
+        )
+
+        assert restarted._paper_capital == pytest.approx(strategy._paper_capital)
+        # Scorecard replays DB trade rows — the retire verdict survives.
+        assert restarted.scorecard.trade_count == 1
+        summary = restarted.get_status()["summary"]
+        assert summary["closed_count"] == 1
+        assert summary["total_pnl"] == pytest.approx(original_summary["total_pnl"])
+        # Restored closes re-arm the entry cooldown for that coin.
+        assert "TEST" in restarted._coin_cooldowns
+
+    def test_persistence_disabled_writes_no_state_file(self, tmp_path):
+        cfg = TrendFollowingConfig(
+            PAPER_TRADING=True,
+            PERSIST_PAPER_CAPITAL=False,
+            DATABASE_PATH=str(tmp_path / "trend_test.db"),
+        )
+        TrendFollowingStrategy(cfg, self._mock_api(), Mock())
+        assert not (tmp_path / "trend_test.db.paper_state.json").exists()

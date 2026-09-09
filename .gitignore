@@ -112,3 +112,6 @@ models/
 tmp/
 temp/
 *.tmp
+
+# Paper-trading state files (live experiment state, never commit)
+*.paper_state.json

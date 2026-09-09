@@ -2,7 +2,9 @@
 Unit tests for Funding Rate Arbitrage Strategy — spot hedge (delta-neutral)
 """
 
+import json
 import pytest
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 from src.strategy.funding_rate_arb import (
@@ -512,3 +514,118 @@ class TestLiveOrderDirection:
         kwargs = strategy.api.place_order.call_args.kwargs
         assert kwargs["side"] == CoreSide.LONG  # closing a SHORT buys back
         assert kwargs["reduce_only"] is True
+
+
+# ---------------------------------------------------------------------------
+# Paper-state restart continuity
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_open_position_survives_restart(tmp_path, mock_api, mock_db):
+    """An open paper position must be restored by the next process, not
+    orphaned — capital alone loses the position book."""
+    cfg = FundingArbConfig(
+        PAPER_TRADING=True,
+        PAPER_CAPITAL=10_000.0,
+        DATABASE_PATH=str(tmp_path / "funding_arb_test.db"),
+    )
+    cfg.validate()
+    strategy = FundingRateArbStrategy(cfg, mock_api, mock_db)
+    pos_id = await strategy.open_position("BTC", PositionSide.SHORT, 0.001, 50_000.0)
+    capital_after_open = strategy._paper_capital
+
+    restarted = FundingRateArbStrategy(cfg, mock_api, mock_db)
+
+    assert restarted._paper_capital == capital_after_open
+    restored = restarted._positions.get(pos_id)
+    assert restored is not None
+    assert restored.status == PositionStatus.OPEN
+    assert restored.coin == "BTC"
+    assert restored.side == PositionSide.SHORT
+    assert restored.entry_price == 50_000.0
+    assert restored.quantity == strategy._positions[pos_id].quantity
+
+
+@pytest.mark.asyncio
+async def test_closed_history_survives_restart(tmp_path, mock_api, mock_db):
+    """Closed-trade history is the scorecard's evidence — a restart must
+    preserve it, not reset the count to zero."""
+    cfg = FundingArbConfig(
+        PAPER_TRADING=True,
+        PAPER_CAPITAL=10_000.0,
+        DATABASE_PATH=str(tmp_path / "funding_arb_test.db"),
+    )
+    cfg.validate()
+    strategy = FundingRateArbStrategy(cfg, mock_api, mock_db)
+    pos_id = await strategy.open_position("ETH", PositionSide.LONG, -0.0005, 2_000.0)
+    await strategy.close_position(pos_id, "rate_reverted", 2_100.0)
+    expected_pnl = strategy.get_status()["summary"]["total_pnl"]
+    assert strategy.get_status()["summary"]["closed_count"] == 1
+
+    restarted = FundingRateArbStrategy(cfg, mock_api, mock_db)
+    summary = restarted.get_status()["summary"]
+
+    assert summary["closed_count"] == 1
+    assert summary["total_pnl"] == pytest.approx(expected_pnl)
+    assert restarted._paper_capital == pytest.approx(strategy._paper_capital)
+
+
+def test_legacy_capital_only_state_still_loads(tmp_path, mock_api, mock_db):
+    """State files written before position persistence existed (capital
+    only) must still restore capital without crashing."""
+    db_path = tmp_path / "funding_arb_legacy.db"
+    state_path = Path(str(db_path) + ".paper_state.json")
+    state_path.write_text(json.dumps({"paper_capital": 5_000.0, "saved_at": 0.0}))
+
+    cfg = FundingArbConfig(
+        PAPER_TRADING=True,
+        PAPER_CAPITAL=10_000.0,
+        DATABASE_PATH=str(db_path),
+    )
+    cfg.validate()
+    strategy = FundingRateArbStrategy(cfg, mock_api, mock_db)
+
+    assert strategy._paper_capital == 5_000.0
+    assert strategy._positions == {}
+
+
+def test_corrupt_position_entry_skipped_not_fatal(tmp_path, mock_api, mock_db):
+    """One bad entry in the state file must not discard capital or the
+    rest of the position book."""
+    db_path = tmp_path / "funding_arb_corrupt.db"
+    state_path = Path(str(db_path) + ".paper_state.json")
+    state_path.write_text(
+        json.dumps(
+            {
+                "paper_capital": 9_000.0,
+                "open_positions": [
+                    {
+                        "id": "good1",
+                        "coin": "BTC",
+                        "side": "SHORT",
+                        "entry_rate": 0.001,
+                        "entry_price": 50_000.0,
+                        "quantity": 0.02,
+                        "notional": 1_000.0,
+                        "entry_time": 1.0,
+                        "last_funding_time": 1.0,
+                    },
+                    {"id": "bad1", "side": "NOT_A_SIDE"},
+                ],
+                "closed_positions": [],
+            }
+        )
+    )
+
+    cfg = FundingArbConfig(
+        PAPER_TRADING=True,
+        PAPER_CAPITAL=10_000.0,
+        DATABASE_PATH=str(db_path),
+    )
+    cfg.validate()
+    strategy = FundingRateArbStrategy(cfg, mock_api, mock_db)
+
+    assert strategy._paper_capital == 9_000.0
+    assert set(strategy._positions) == {"good1"}
+    assert strategy._positions["good1"].side == PositionSide.SHORT
